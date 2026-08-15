@@ -1,0 +1,70 @@
+<main class="shell">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">ENTERPRISE KNOWLEDGE</p>
+      <h1>Document Intelligence</h1>
+    </div>
+    <span class="status"><span></span> API connected locally</span>
+  </header>
+
+  <section class="workspace">
+    <aside class="sidebar">
+      <section class="card">
+        <h2>Session access</h2>
+        <p class="hint"><strong>Development only.</strong> Use <code>dev-admin-key</code> to upload. The token stays only in this browser tab.</p>
+        <label for="token">Bearer token</label>
+        <input id="token" type="password" [ngModel]="token()" (ngModelChange)="token.set($event)" (blur)="saveToken()" />
+        <button class="secondary" (click)="saveToken()">Save token</button>
+      </section>
+
+      <section class="card">
+        <h2>Index a document</h2>
+        <p class="hint">Supported: PDF, DOCX, TXT, and Markdown. Maximum size is configured by the API.</p>
+        <label class="file-picker" for="file">Choose document<input id="file" type="file" accept=".pdf,.docx,.txt,.md" (change)="chooseFile($event)" /></label>
+        @if (selectedFile(); as file) { <p class="file-name">{{ file.name }}</p> }
+        <button class="primary" [disabled]="!selectedFile() || isUploading()" (click)="upload()">
+          {{ isUploading() ? 'Uploading and indexing…' : 'Upload and index' }}
+        </button>
+        <p class="upload-status">{{ uploadStatus() }}</p>
+      </section>
+
+      <section class="card safety">
+        <h2>How answers stay reliable</h2>
+        <p>Every response is limited to your tenant’s retrieved chunks and includes evidence you can inspect.</p>
+      </section>
+    </aside>
+
+    <section class="chat card">
+      <div class="chat-heading">
+        <div><p class="eyebrow">GROUNDED CHAT</p><h2>Ask your knowledge base</h2></div>
+        <span>{{ messages().length }} messages</span>
+      </div>
+      <div class="conversation" aria-live="polite">
+        @if (messages().length === 0) {
+          <div class="empty-state"><strong>Start with a document question.</strong><p>For example: “Which architecture patterns are described?”</p></div>
+        }
+        @for (message of messages(); track $index) {
+          <article class="message" [ngClass]="message.role">
+            <p class="role">{{ message.role === 'user' ? 'You' : 'Enterprise RAG' }}</p>
+            <p class="message-text">{{ message.content }}</p>
+            @if (message.citations?.length) {
+              <section class="citations"><h3>Sources</h3>
+                @for (citation of message.citations; track citation.filename + citation.page_number + citation.excerpt) {
+                  <details><summary>{{ citation.filename }}@if (citation.page_number) { · p. {{ citation.page_number }} }</summary><p>{{ citation.excerpt }}</p></details>
+                }
+              </section>
+            }
+            @if (message.requestId) { <p class="request-id">Request ID: {{ message.requestId }}</p> }
+          </article>
+        }
+        @if (isAsking()) { <p class="thinking">Searching authorized documents and preparing a cited answer…</p> }
+      </div>
+      <div class="composer">
+        <label for="question" class="sr-only">Question</label>
+        <textarea id="question" rows="3" placeholder="Ask a question about your indexed documents…" [ngModel]="question()" (ngModelChange)="question.set($event)" (keydown.control.enter)="ask()"></textarea>
+        <button class="primary" [disabled]="!canAsk()" (click)="ask()">{{ isAsking() ? 'Searching…' : 'Ask question' }}</button>
+      </div>
+      @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+    </section>
+  </section>
+</main>

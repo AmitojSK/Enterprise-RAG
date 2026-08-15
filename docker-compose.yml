@@ -1,0 +1,13 @@
+# Local development stack: API + a persistent Qdrant vector database.
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    ports: ["6333:6333"]
+    volumes: ["qdrant_data:/qdrant/storage"]
+  api:
+    build: .
+    env_file: .env
+    ports: ["8000:8000"]
+    depends_on: [qdrant]
+volumes:
+  qdrant_data:

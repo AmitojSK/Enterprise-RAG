@@ -1,0 +1,8 @@
+# Local configuration and generated Python files must not enter source control.
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+coverage.xml
