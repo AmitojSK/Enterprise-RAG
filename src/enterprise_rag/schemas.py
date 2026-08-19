@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class QueryRequest(BaseModel):
-    """A user question plus optional metadata filters scoped to their tenant."""
+    """A question plus an optional list of document IDs to search."""
 
     question: str = Field(min_length=3, max_length=4_000)
     document_ids: list[str] | None = None
@@ -32,3 +32,6 @@ class IngestResponse(BaseModel):
     document_id: str
     filename: str
     chunks_indexed: int
+    status: str = "indexed"
+    duplicate: bool = False
+

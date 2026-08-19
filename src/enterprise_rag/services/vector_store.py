@@ -1,4 +1,4 @@
-"""Qdrant repository that enforces tenant filtering on every search."""
+"""Qdrant repository for the shared public document library."""
 
 from dataclasses import dataclass
 import time
@@ -37,11 +37,10 @@ class QdrantStore:
         self.batch_size = settings.indexing_batch_size
 
     def ensure_collection(self, vector_size: int) -> None:
-        """Create the collection and indexes required for secure filtered search.
+        """Create the collection and index required for optional document filtering.
 
         Qdrant Cloud requires a payload index before a field can be used as a
-        filter. The `tenant_id` index is essential: every search is scoped to
-        one tenant. `document_id` makes the optional document filter efficient.
+        filter. `document_id` makes the optional document filter efficient.
         Calling `create_payload_index` is safe for an existing collection and
         also repairs collections created before this index requirement existed.
         """
@@ -51,19 +50,15 @@ class QdrantStore:
                 collection_name=self.collection,
                 vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE),
             )
-        # Store tenant and document identifiers as exact-match keywords, not
-        # full-text values. This is what Qdrant's filter API expects.
-        for field_name in ("tenant_id", "document_id"):
-            self.client.create_payload_index(
-                collection_name=self.collection,
-                field_name=field_name,
-                field_schema=models.PayloadSchemaType.KEYWORD,
-                wait=True,
-            )
+        self.client.create_payload_index(
+            collection_name=self.collection,
+            field_name="document_id",
+            field_schema=models.PayloadSchemaType.KEYWORD,
+            wait=True,
+        )
 
     def upsert(
         self,
-        tenant_id: str,
         document_id: str,
         filename: str,
         chunks: list[TextChunk],
@@ -82,7 +77,6 @@ class QdrantStore:
             models.PointStruct(
                 id=str(uuid5(document_uuid, f"chunk:{index}")), vector=vector,
                 payload={
-                    "tenant_id": tenant_id,
                     "document_id": document_id,
                     "filename": filename,
                     "chunk_index": index,
@@ -103,7 +97,7 @@ class QdrantStore:
                 self.client.upsert(collection_name=self.collection, points=points, wait=True)
                 return
             except ResponseHandlingException as error:
-                # Do not hide validation/authentication errors behind retries.
+                # Do not hide deterministic validation errors behind retries.
                 if "timed out" not in str(error).lower() or attempt == 2:
                     raise VectorStoreUnavailable(
                         "Qdrant did not confirm the document write. Please retry shortly."
@@ -114,23 +108,22 @@ class QdrantStore:
 
     def search(
         self,
-        tenant_id: str,
         vector: list[float],
         limit: int,
         document_ids: list[str] | None = None,
     ) -> list[RetrievedChunk]:
-        """Search only the caller's tenant; optional document filters further narrow access."""
+        """Search the shared library; optional document IDs narrow the result set."""
 
         # This also ensures the payload indexes exist for collections created
         # before the first query, including collections already in Qdrant Cloud.
         self.ensure_collection(len(vector))
-        conditions = [models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id))]
+        conditions: list[models.FieldCondition] = []
         if document_ids:
             conditions.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))
         results = self.client.query_points(
             collection_name=self.collection,
             query=vector,
-            query_filter=models.Filter(must=conditions),
+            query_filter=models.Filter(must=conditions) if conditions else None,
             limit=limit,
         ).points
         return [

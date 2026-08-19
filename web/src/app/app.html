@@ -10,16 +10,8 @@
   <section class="workspace">
     <aside class="sidebar">
       <section class="card">
-        <h2>Session access</h2>
-        <p class="hint"><strong>Development only.</strong> Use <code>dev-admin-key</code> to upload. The token stays only in this browser tab.</p>
-        <label for="token">Bearer token</label>
-        <input id="token" type="password" [ngModel]="token()" (ngModelChange)="token.set($event)" (blur)="saveToken()" />
-        <button class="secondary" (click)="saveToken()">Save token</button>
-      </section>
-
-      <section class="card">
         <h2>Index a document</h2>
-        <p class="hint">Supported: PDF, DOCX, TXT, and Markdown. Maximum size is configured by the API.</p>
+        <p class="hint">Shared demo library. Supported: PDF, DOCX, TXT, and Markdown. Do not upload confidential files.</p>
         <label class="file-picker" for="file">Choose document<input id="file" type="file" accept=".pdf,.docx,.txt,.md" (change)="chooseFile($event)" /></label>
         @if (selectedFile(); as file) { <p class="file-name">{{ file.name }}</p> }
         <button class="primary" [disabled]="!selectedFile() || isUploading()" (click)="upload()">
@@ -30,7 +22,7 @@
 
       <section class="card safety">
         <h2>How answers stay reliable</h2>
-        <p>Every response is limited to your tenant’s retrieved chunks and includes evidence you can inspect.</p>
+        <p>Every response is grounded in retrieved document chunks and includes evidence you can inspect.</p>
       </section>
     </aside>
 
@@ -57,7 +49,7 @@
             @if (message.requestId) { <p class="request-id">Request ID: {{ message.requestId }}</p> }
           </article>
         }
-        @if (isAsking()) { <p class="thinking">Searching authorized documents and preparing a cited answer…</p> }
+        @if (isAsking()) { <p class="thinking">Searching indexed documents and preparing a cited answer…</p> }
       </div>
       <div class="composer">
         <label for="question" class="sr-only">Question</label>

@@ -1,15 +1,8 @@
-"""Tests for authentication parsing and the first prompt-safety control."""
+"""Tests for the prompt-safety gateway at the public API boundary."""
 
 import pytest
 from fastapi import HTTPException
-from enterprise_rag.security import parse_api_keys, reject_prompt_injection
-
-
-def test_api_key_parsing_retains_tenant_and_role() -> None:
-    """Tenant and role values from configuration form the authorization context."""
-
-    principal = parse_api_keys("key-one:tenant-a:admin")["key-one"]
-    assert (principal.tenant_id, principal.role) == ("tenant-a", "admin")
+from enterprise_rag.security import reject_prompt_injection
 
 
 def test_obvious_prompt_injection_is_blocked() -> None:

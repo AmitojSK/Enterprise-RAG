@@ -20,6 +20,9 @@ export interface IngestResponse {
   document_id: string;
   filename: string;
   chunks_indexed: number;
+  status: string;
+  /** True means the same file bytes were already indexed in the shared library. */
+  duplicate: boolean;
 }
 
 export interface ChatMessage {

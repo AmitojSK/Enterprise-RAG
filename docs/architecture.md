@@ -2,17 +2,16 @@
 
 ```mermaid
 flowchart LR
-    Client -->|Bearer key| API[FastAPI API]
-    API --> Auth[Authentication and tenant scope]
+    Client[Angular public demo] --> API[FastAPI API]
     API --> Safety[Prompt-safety gate]
-    Admin -->|upload| Ingest[Parse, chunk, embed]
+    Client -->|Upload file| Ingest[Parse, chunk, embed]
     Ingest --> Qdrant[(Qdrant vectors)]
-    Safety --> Retrieve[Tenant-filtered retrieval]
+    Safety --> Retrieve[Semantic retrieval]
     Retrieve --> Qdrant
     Retrieve --> LLM[Grounded LLM answer]
     LLM --> Client
 ```
 
-Each vector contains `tenant_id`, `document_id`, filename, chunk number, and text. The vector query always includes `tenant_id`, so a caller cannot retrieve another tenant's data merely by guessing a document identifier.
+Each vector contains a `document_id`, filename, page number, chunk number, and text. A question searches the shared public library, optionally narrowed to specific document IDs.
 
-For production, use an identity provider to issue short-lived OIDC/JWT tokens, a managed Qdrant deployment with TLS, a secret manager, rate limiting at an API gateway, malware scanning before parsing, and centralized audit-log retention.
+This intentionally unauthenticated application is suitable only for a portfolio demo with non-confidential documents. Before accepting private documents or user-specific data, add an identity provider, per-user/organization authorization, and scoped vector filters.

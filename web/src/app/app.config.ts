@@ -4,11 +4,11 @@ import { provideRouter } from '@angular/router';
 
 import { routes } from './app.routes';
 
+/** Angular providers for the public portfolio demo. */
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideRouter(routes),
-    // Makes Angular's HttpClient available to RagApiService.
     provideHttpClient(),
-  ]
+  ],
 };

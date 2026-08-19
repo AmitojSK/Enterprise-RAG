@@ -1,20 +1,19 @@
 # Enterprise RAG
 
-A production-minded, educational Retrieval-Augmented Generation service. It lets an administrator ingest documents and lets authenticated users ask grounded questions with citations.
+A production-minded, educational Retrieval-Augmented Generation service. It lets visitors index non-confidential documents and ask grounded questions with page-level citations.
 
 ## What is different from the basic project?
 
-The basic RAG project teaches chunking and keyword search. This project adds a real HTTP API, semantic embeddings, a vector database, tenant isolation, role-based ingestion, document metadata, grounded generation, citations, audit logging, tests, container support, and evaluation guidance.
+The basic RAG project teaches chunking and keyword search. This project adds a real HTTP API, semantic embeddings, a vector database, content-based deduplication, document metadata, grounded generation, citations, audit logging, tests, container support, and evaluation guidance.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Upload[Admin upload] --> Parse[Local parsing and chunking]
+  Upload[Public upload] --> Parse[Local parsing and chunking]
   Parse --> Embed[Embeddings]
   Embed --> DB[(Qdrant)]
-  Question[Authenticated question] --> Filter[Tenant filter]
-  Filter --> DB
+  Question[Public question] --> DB
   DB --> Context[Cited context]
   Context --> Answer[Grounded answer]
 ```
@@ -40,7 +39,7 @@ If your prompt looks like `D:\...>` (Command Prompt, as in the example below), u
 pip install -e .[dev]
 ```
 
-2. Add `OPENAI_API_KEY` to `.env`. The example contains two development bearer keys: `dev-admin-key` can upload and query; `dev-reader-key` can query only.
+2. Add `OPENAI_API_KEY` to `.env`.
 
 3. Open `http://127.0.0.1:8000/docs` to use the interactive API documentation.
 
@@ -61,26 +60,26 @@ cd web
 npm.cmd start
 ```
 
-Open `http://localhost:4200`. Enter `dev-admin-key` in the **Bearer token** field to upload and query. The interface keeps this development token only in browser session storage, so it is removed when the tab is closed.
+Open `http://localhost:4200`. The public demo has no sign-in or token field: upload a non-confidential document, then ask a question.
 
-The backend explicitly permits only the local Angular origins through CORS. When deploying, replace those origins in `src/enterprise_rag/main.py` with your HTTPS frontend domain and replace the development tokens with OIDC/JWT authentication.
+The backend explicitly permits only the local Angular origins through CORS. When deploying, replace those origins in `src/enterprise_rag/main.py` with your HTTPS frontend domain.
 
 ## Example calls
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8000/v1/documents -H "Authorization: Bearer dev-admin-key" -F "file=@policy.pdf"
-curl.exe -X POST http://127.0.0.1:8000/v1/query -H "Authorization: Bearer dev-reader-key" -H "Content-Type: application/json" -d '{"question":"What is the retention policy?"}'
+curl.exe -X POST http://127.0.0.1:8000/v1/documents -F "file=@policy.pdf"
+curl.exe -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json" -d '{"question":"What is the retention policy?"}'
 ```
 
 ## Learning path
 
-Read the code in this order: `config.py`, `security.py`, `document_loader.py`, `chunking.py`, `vector_store.py`, `rag.py`, then `api/routes.py`. Every module has docstrings and inline comments explaining the non-obvious decisions.
+Read the code in this order: `config.py`, `document_loader.py`, `chunking.py`, `vector_store.py`, `rag.py`, then `api/routes.py`. Every module has docstrings and inline comments explaining the non-obvious decisions.
 
 ## Production checklist
 
-- Replace development API keys with OIDC/JWT validation and organization claims.
 - Put API keys in a secret manager; rotate them and never commit `.env`.
 - Enforce TLS, request rate limits, malware scanning, and content-type validation at the edge.
+- This public demo must not accept confidential or user-specific documents. Add authentication and per-user/organization authorization before supporting those use cases.
 - Run evaluation datasets before releasing retrieval or prompt changes.
 - Configure Qdrant backups, monitoring, retention, and deletion workflows.
 

@@ -8,7 +8,7 @@ from enterprise_rag.services.vector_store import QdrantStore
 
 
 class RAGService:
-    """Retrieve tenant-scoped evidence, then ask the model to answer only from it."""
+    """Retrieve public-library evidence, then answer only from that evidence."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -17,15 +17,15 @@ class RAGService:
         self.llm = OpenAI(api_key=settings.openai_api_key)
 
     def answer(
-        self, tenant_id: str, question: str, document_ids: list[str] | None
+        self, question: str, document_ids: list[str] | None
     ) -> tuple[str, list[Citation]]:
-        """Return a cited answer; never silently search across a tenant boundary."""
+        """Return a cited answer grounded only in retrieved document excerpts."""
 
         query_vector = self.embeddings.embed([question])[0]
-        chunks = self.store.search(tenant_id, query_vector, self.settings.top_k, document_ids)
+        chunks = self.store.search(query_vector, self.settings.top_k, document_ids)
         selected = chunks[: self.settings.rerank_k]
         if not selected:
-            return "I could not find supporting information in your authorized documents.", []
+            return "I could not find supporting information in the indexed documents.", []
         context = "\n\n".join(
             f"--- Document: {chunk.filename}; page: {chunk.page_number or 'not available'} ---\n{chunk.text}"
             for chunk in selected

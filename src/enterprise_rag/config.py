@@ -12,13 +12,15 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
     qdrant_collection: str = "enterprise_documents"
-    api_keys: str = "dev-admin-key:acme:admin"
     max_upload_bytes: int = 10 * 1024 * 1024
     top_k: int = 8
     rerank_k: int = 4
     log_level: str = "INFO"
     embedding_model: str = "text-embedding-3-small"
     chat_model: str = "gpt-4o-mini"
+    # SQLite keeps the project runnable locally. Render will provide a
+    # postgresql+psycopg:// URL through its secret environment variables.
+    database_url: str = "sqlite:///./enterprise_rag.db"
     # Cloud vector writes can exceed the client library's short default timeout.
     qdrant_timeout_seconds: int = 60
     indexing_batch_size: int = 32
