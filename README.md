@@ -1,86 +1,124 @@
 # Enterprise RAG
 
-A production-minded, educational Retrieval-Augmented Generation service. It lets visitors index non-confidential documents and ask grounded questions with page-level citations.
+A production-grade Retrieval-Augmented Generation service. Upload documents, index them as vector embeddings, and ask grounded questions with page-level citations — all through a modern web interface or REST API.
 
-## What is different from the basic project?
+## Tech Stack
 
-The basic RAG project teaches chunking and keyword search. This project adds a real HTTP API, semantic embeddings, a vector database, content-based deduplication, document metadata, grounded generation, citations, audit logging, tests, container support, and evaluation guidance.
+| Layer | Technology |
+|-------|-----------|
+| **Backend API** | Python 3.12, FastAPI, Uvicorn, Pydantic |
+| **LLM & Embeddings** | OpenAI GPT-4o-mini, text-embedding-3-small |
+| **Vector Database** | Qdrant (cosine similarity search) |
+| **Relational Database** | PostgreSQL 16 (document metadata, deduplication) |
+| **Task Queue** | Celery 5.x with Redis broker |
+| **Frontend** | Angular 19, TypeScript, SCSS |
+| **Containerization** | Docker, Docker Compose |
+| **Web Server** | Nginx (reverse proxy, SPA routing, SSE support) |
+| **PDF Parsing** | pypdf |
+| **DOCX Parsing** | python-docx |
+| **ORM** | SQLAlchemy 2.x |
+| **Testing** | pytest, httpx |
+| **Linting** | Ruff |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Upload[Public upload] --> Parse[Local parsing and chunking]
-  Parse --> Embed[Embeddings]
-  Embed --> DB[(Qdrant)]
-  Question[Public question] --> DB
-  DB --> Context[Cited context]
-  Context --> Answer[Grounded answer]
+  Upload[Document upload] --> Parse[Text extraction & chunking]
+  Parse --> Embed[OpenAI embeddings]
+  Embed --> Qdrant[(Qdrant vector DB)]
+  Question[User question] --> EmbedQ[Query embedding]
+  EmbedQ --> Qdrant
+  Qdrant --> Rerank[LLM reranking]
+  Rerank --> Answer[Grounded answer + citations]
 ```
 
-## Quick start
+## Key Features
 
-1. Create and activate a virtual environment.
+- **Semantic search** with cosine similarity and LLM-based reranking
+- **Content-hash deduplication** — re-uploading the same file re-indexes with latest chunking config
+- **Score threshold filtering** — only chunks above a relevance threshold reach the LLM
+- **SSE streaming** — token-by-token response streaming to the frontend
+- **Background indexing** — Celery workers handle large documents asynchronously
+- **Prompt injection defense** — input filtering + system prompt treats excerpts as data
+- **Audit logging** — every query and ingestion is logged with request IDs
+- **Deterministic point IDs** — idempotent Qdrant upserts with retry logic
+
+## Quick Start
+
+### Docker Compose (recommended)
+
+```bash
+cp .env.example .env
+# Add OPENAI_API_KEY to .env
+docker compose up --build
+```
+
+Open `http://localhost:4200` — upload a document, then ask questions.
+
+### Local development
 
 ```powershell
-cd 'D:\Agentic AI\Enterprise Rag'
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-# PowerShell requires quotes because square brackets have special meaning there.
 pip install -e '.[dev]'
-Copy-Item .env.example .env
-docker compose up -d qdrant
+cp .env.example .env
+# Add OPENAI_API_KEY to .env
+docker compose up -d qdrant postgres redis
 uvicorn enterprise_rag.main:app --reload
 ```
 
-If your prompt looks like `D:\...>` (Command Prompt, as in the example below), use this equivalent command **without** single quotes:
+For the Angular frontend:
 
-```bat
-pip install -e .[dev]
-```
-
-2. Add `OPENAI_API_KEY` to `.env`.
-
-3. Open `http://127.0.0.1:8000/docs` to use the interactive API documentation.
-
-## Angular web interface
-
-The `web/` folder contains an Angular + TypeScript dashboard for uploading documents, asking questions, and inspecting source citations.
-
-Start the FastAPI backend in one Command Prompt window:
-
-```bat
-uvicorn enterprise_rag.main:app --reload
-```
-
-Then open a second Command Prompt window, activate the same virtual environment if desired, and start Angular:
-
-```bat
+```bash
 cd web
-npm.cmd start
+npm install
+npm start
 ```
 
-Open `http://localhost:4200`. The public demo has no sign-in or token field: upload a non-confidential document, then ask a question.
+## API Examples
 
-The backend explicitly permits only the local Angular origins through CORS. When deploying, replace those origins in `src/enterprise_rag/main.py` with your HTTPS frontend domain.
+```bash
+# Upload a document
+curl -X POST http://127.0.0.1:8000/v1/documents -F "file=@policy.pdf"
 
-## Example calls
+# Ask a question
+curl -X POST http://127.0.0.1:8000/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What is the retention policy?"}'
 
-```powershell
-curl.exe -X POST http://127.0.0.1:8000/v1/documents -F "file=@policy.pdf"
-curl.exe -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json" -d '{"question":"What is the retention policy?"}'
+# Stream answer via SSE
+curl -X POST http://127.0.0.1:8000/v1/query/stream \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What is the retention policy?"}'
 ```
 
-## Learning path
+## Project Structure
 
-Read the code in this order: `config.py`, `document_loader.py`, `chunking.py`, `vector_store.py`, `rag.py`, then `api/routes.py`. Every module has docstrings and inline comments explaining the non-obvious decisions.
+```
+src/enterprise_rag/       # FastAPI backend
+  api/routes.py           # HTTP endpoints
+  services/               # Business logic (chunking, embeddings, RAG, vector store)
+  config.py               # Environment-based settings
+  database.py             # SQLAlchemy setup
+  models.py               # ORM models
+web/                      # Angular frontend
+docs/                     # Architecture & evaluation docs
+tests/                    # pytest test suite
+docker-compose.yml        # Full stack orchestration
+```
 
-## Production checklist
+## Documentation
 
-- Put API keys in a secret manager; rotate them and never commit `.env`.
-- Enforce TLS, request rate limits, malware scanning, and content-type validation at the edge.
-- This public demo must not accept confidential or user-specific documents. Add authentication and per-user/organization authorization before supporting those use cases.
-- Run evaluation datasets before releasing retrieval or prompt changes.
-- Configure Qdrant backups, monitoring, retention, and deletion workflows.
+- [Architecture](docs/architecture.md)
+- [Sequence Diagrams](docs/sequence-diagrams.md)
+- [Evaluation](docs/evaluation.md)
+- [Production Readiness](docs/production-readiness.md)
 
-See [architecture](docs/architecture.md), [sequence diagrams](docs/sequence-diagrams.md), [evaluation](docs/evaluation.md), and the candid [production-readiness guide](docs/production-readiness.md) for deeper guidance.
+## Production Checklist
+
+- Store API keys in a secret manager; never commit `.env`
+- Enforce TLS, rate limits, and content-type validation at the edge
+- Add authentication and per-user authorization before handling confidential documents
+- Run evaluation datasets before releasing retrieval or prompt changes
+- Configure Qdrant backups and monitoring
