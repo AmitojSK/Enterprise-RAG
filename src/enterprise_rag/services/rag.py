@@ -58,7 +58,7 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
 
         query_vector = self.embeddings.embed([question])[0]
         logger.info("Embedded question into %d-dim vector", len(query_vector))
-        chunks = self.store.search(query_vector, self.settings.top_k, document_ids)
+        chunks = self.store.search(query_vector, self.settings.top_k, document_ids, self.settings.score_threshold)
         logger.info("Search returned %d chunks", len(chunks))
         if chunks:
             logger.info("Top chunk score=%.4f, file=%s", chunks[0].score, chunks[0].filename)

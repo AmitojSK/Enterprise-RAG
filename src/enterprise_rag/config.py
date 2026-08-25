@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     qdrant_api_key: str | None = None
     qdrant_collection: str = "enterprise_documents"
     max_upload_bytes: int = 10 * 1024 * 1024
-    top_k: int = 8
-    rerank_k: int = 4
+    top_k: int = 20
+    rerank_k: int = 8
+    score_threshold: float = 0.25
     log_level: str = "INFO"
     embedding_model: str = "text-embedding-3-small"
     chat_model: str = "gpt-4o-mini"

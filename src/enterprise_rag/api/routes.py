@@ -73,13 +73,12 @@ async def ingest_document(
         )
     )
     if existing and existing.status == "indexed":
-        return IngestResponse(
-            document_id=existing.id,
-            filename=existing.filename,
-            chunks_indexed=existing.chunk_count,
-            status="indexed",
-            duplicate=True,
-        )
+        # Re-index: delete old vectors so the document gets fresh chunks.
+        QdrantStore(settings).delete_by_document(existing.id)
+        existing.status = "processing"
+        existing.chunk_count = 0
+        existing.error_message = None
+        db.commit()
 
     # A failed/interrupted attempt has the same fingerprint. Resume that record
     # rather than violating the content-hash uniqueness rule or making a second.

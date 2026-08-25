@@ -115,6 +115,7 @@ class QdrantStore:
         vector: list[float],
         limit: int,
         document_ids: list[str] | None = None,
+        score_threshold: float = 0.0,
     ) -> list[RetrievedChunk]:
         """Search the shared library; optional document IDs narrow the result set."""
 
@@ -134,7 +135,7 @@ class QdrantStore:
             with_payload=True,
         ).points
         logger.info("query_points returned %d results (limit=%d, filter=%s)", len(results), limit, bool(document_ids))
-        return [
+        chunks = [
             RetrievedChunk(
                 document_id=item.payload["document_id"],
                 filename=item.payload["filename"],
@@ -143,7 +144,10 @@ class QdrantStore:
                 score=item.score,
             )
             for item in results
+            if item.score >= score_threshold
         ]
+        logger.info("%d chunks above score threshold %.2f", len(chunks), score_threshold)
+        return chunks
 
     def delete_by_document(self, document_id: str) -> None:
         """Remove all vectors belonging to a document from the collection."""

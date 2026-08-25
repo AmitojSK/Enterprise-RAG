@@ -1,5 +1,13 @@
 # Local development stack: API + a persistent Qdrant vector database.
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+      POSTGRES_DB: enterprise_rag
+    ports: ["5432:5432"]
+    volumes: ["pg_data:/var/lib/postgresql/data"]
   qdrant:
     image: qdrant/qdrant:v1.12.5
     ports: ["6333:6333"]
@@ -14,21 +22,21 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
-    volumes: ["app_data:/app/data"]
-    depends_on: [qdrant, redis]
+      DATABASE_URL: postgresql+psycopg://rag:rag@postgres:5432/enterprise_rag
+    depends_on: [postgres, qdrant, redis]
   worker:
     build: .
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
-    volumes: ["app_data:/app/data"]
+      DATABASE_URL: postgresql+psycopg://rag:rag@postgres:5432/enterprise_rag
     command: celery -A enterprise_rag.services.tasks:celery_app worker --loglevel=info
-    depends_on: [qdrant, redis]
+    depends_on: [postgres, qdrant, redis]
   web:
     build: ./web
     ports: ["4200:80"]
     depends_on: [api]
 volumes:
+  pg_data:
   qdrant_data:
-  app_data:
