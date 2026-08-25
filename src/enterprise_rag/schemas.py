@@ -35,3 +35,26 @@ class IngestResponse(BaseModel):
     status: str = "indexed"
     duplicate: bool = False
 
+
+class DocumentListItem(BaseModel):
+    """Summary row returned by the document listing endpoint."""
+
+    document_id: str
+    filename: str
+    status: str
+    chunk_count: int
+    created_at: str
+    indexed_at: str | None = None
+
+
+class DocumentDetail(BaseModel):
+    """Full metadata for a single document."""
+
+    document_id: str
+    filename: str
+    status: str
+    chunk_count: int
+    error_message: str | None = None
+    created_at: str
+    indexed_at: str | None = None
+

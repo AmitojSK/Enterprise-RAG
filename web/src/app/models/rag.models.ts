@@ -25,6 +25,31 @@ export interface IngestResponse {
   duplicate: boolean;
 }
 
+export interface DocumentListItem {
+  document_id: string;
+  filename: string;
+  status: string;
+  chunk_count: number;
+  created_at: string;
+  indexed_at: string | null;
+}
+
+export interface DocumentDetail {
+  document_id: string;
+  filename: string;
+  status: string;
+  chunk_count: number;
+  error_message: string | null;
+  created_at: string;
+  indexed_at: string | null;
+}
+
+export interface StreamTokenEvent {
+  token?: string;
+  citations?: Citation[];
+  request_id?: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;

@@ -1,6 +1,6 @@
 /**
- * Change this one value when the FastAPI service is deployed elsewhere.
- * In a production build, provide this value through deployment configuration
- * rather than committing a company-specific server address.
+ * In Docker, nginx proxies /v1/ to the API so no origin is needed.
+ * For local `ng serve`, fall back to the FastAPI dev server.
  */
-export const apiBaseUrl = 'http://127.0.0.1:8000';
+const isLocalDev = typeof window !== 'undefined' && window.location.port === '4200';
+export const apiBaseUrl = isLocalDev ? 'http://127.0.0.1:8000' : '';

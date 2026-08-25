@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Cloud vector writes can exceed the client library's short default timeout.
     qdrant_timeout_seconds: int = 60
     indexing_batch_size: int = 32
+    redis_url: str = "redis://localhost:6379/0"
+    s3_bucket: str = ""
+    s3_prefix: str = ""
 
 
 @lru_cache

@@ -1,15 +1,24 @@
 """Public HTTP endpoints for document ingestion and grounded questions."""
 
 import hashlib
+import json
+import logging
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from enterprise_rag.config import Settings, get_settings
 from enterprise_rag.database import get_db
 from enterprise_rag.models import DocumentRecord
-from enterprise_rag.schemas import IngestResponse, QueryRequest, QueryResponse
+from enterprise_rag.schemas import (
+    DocumentDetail,
+    DocumentListItem,
+    IngestResponse,
+    QueryRequest,
+    QueryResponse,
+)
 from enterprise_rag.security import reject_prompt_injection
 from enterprise_rag.services.audit import log_ingestion, log_query
 from enterprise_rag.services.chunking import chunk_pages
@@ -18,7 +27,21 @@ from enterprise_rag.services.embeddings import OpenAIEmbeddingService
 from enterprise_rag.services.rag import RAGService
 from enterprise_rag.services.vector_store import QdrantStore, VectorStoreUnavailable
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/v1", tags=["RAG"])
+
+
+def _celery_available() -> bool:
+    """Check whether the Celery broker (Redis) is reachable."""
+    try:
+        from enterprise_rag.services.tasks import celery_app
+        conn = celery_app.connection()
+        conn.connect()
+        conn.close()
+        return True
+    except Exception:
+        return False
 
 
 @router.post("/documents", response_model=IngestResponse, status_code=status.HTTP_201_CREATED)
@@ -69,6 +92,15 @@ async def ingest_document(
     if existing is None:
         db.add(record)
     db.commit()
+
+    # Dispatch to Celery when a broker is available; fall back to synchronous.
+    if _celery_available():
+        from enterprise_rag.services.tasks import ingest_document_task
+        ingest_document_task.delay(record.id, filename, content)
+        return IngestResponse(
+            document_id=record.id, filename=filename, chunks_indexed=0, status="processing",
+        )
+
     try:
         chunks = chunk_pages(extract_pages(filename, content))
         if not chunks:
@@ -107,3 +139,90 @@ def query_knowledge(
     answer, citations = RAGService(settings).answer(request.question, request.document_ids)
     log_query(request_id, len(citations))
     return QueryResponse(answer=answer, citations=citations, request_id=str(request_id))
+
+
+def _format_timestamp(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+@router.get("/documents", response_model=list[DocumentListItem])
+def list_documents(db: Session = Depends(get_db)) -> list[DocumentListItem]:
+    """Return every document in the shared public library."""
+
+    records = db.scalars(select(DocumentRecord).order_by(DocumentRecord.created_at.desc())).all()
+    return [
+        DocumentListItem(
+            document_id=r.id,
+            filename=r.filename,
+            status=r.status,
+            chunk_count=r.chunk_count,
+            created_at=r.created_at.isoformat(),
+            indexed_at=_format_timestamp(r.indexed_at),
+        )
+        for r in records
+    ]
+
+
+@router.get("/documents/{document_id}", response_model=DocumentDetail)
+def get_document(document_id: str, db: Session = Depends(get_db)) -> DocumentDetail:
+    """Return full metadata for a single document."""
+
+    record = db.get(DocumentRecord, document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return DocumentDetail(
+        document_id=record.id,
+        filename=record.filename,
+        status=record.status,
+        chunk_count=record.chunk_count,
+        error_message=record.error_message,
+        created_at=record.created_at.isoformat(),
+        indexed_at=_format_timestamp(record.indexed_at),
+    )
+
+
+@router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_document(
+    document_id: str,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> None:
+    """Remove a document's metadata and vectors from the shared library."""
+
+    record = db.get(DocumentRecord, document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found")
+    QdrantStore(settings).delete_by_document(document_id)
+    db.delete(record)
+    db.commit()
+
+
+@router.post("/query/stream")
+def query_stream(
+    request: QueryRequest,
+    settings: Settings = Depends(get_settings),
+) -> StreamingResponse:
+    """Stream the answer token-by-token via SSE, with citations as a final event."""
+
+    reject_prompt_injection(request.question)
+    request_id = uuid4()
+    token_iter, citations = RAGService(settings).stream_answer(request.question, request.document_ids)
+    log_query(request_id, len(citations))
+
+    def event_stream():
+        for token in token_iter:
+            yield f"data: {json.dumps({'token': token})}\n\n"
+        yield f"data: {json.dumps({'citations': [c.model_dump() for c in citations], 'request_id': str(request_id)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/documents/scan-s3", tags=["Connectors"])
+def scan_s3(settings: Settings = Depends(get_settings)) -> list[dict]:
+    """Scan the configured S3 bucket and index any new supported documents."""
+
+    if not settings.s3_bucket:
+        raise HTTPException(status_code=400, detail="S3_BUCKET is not configured")
+    from enterprise_rag.services.s3_loader import scan_and_enqueue
+    return scan_and_enqueue(settings)
