@@ -24,6 +24,23 @@
         <h2>How answers stay reliable</h2>
         <p>Every response is grounded in retrieved document chunks and includes evidence you can inspect.</p>
       </section>
+
+      @if (documents().length) {
+        <section class="card">
+          <h2>Indexed documents</h2>
+          <ul class="doc-list">
+            @for (doc of documents(); track doc.document_id) {
+              <li>
+                <div class="doc-info">
+                  <span class="doc-name">{{ doc.filename }}</span>
+                  <span class="doc-meta">{{ doc.chunk_count }} chunks · {{ doc.status }}</span>
+                </div>
+                <button class="doc-delete" title="Remove from library" (click)="deleteDocument(doc)">✕</button>
+              </li>
+            }
+          </ul>
+        </section>
+      }
     </aside>
 
     <section class="chat card">

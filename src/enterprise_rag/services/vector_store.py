@@ -136,3 +136,17 @@ class QdrantStore:
             )
             for item in results
         ]
+
+    def delete_by_document(self, document_id: str) -> None:
+        """Remove all vectors belonging to a document from the collection."""
+
+        if not self.client.collection_exists(self.collection):
+            return
+        self.client.delete(
+            collection_name=self.collection,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[models.FieldCondition(key="document_id", match=models.MatchValue(value=document_id))]
+                )
+            ),
+        )

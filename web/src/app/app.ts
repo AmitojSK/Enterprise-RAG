@@ -1,9 +1,9 @@
-import { Component, computed, signal } from '@angular/core';
+import { Component, computed, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { NgClass } from '@angular/common';
 import { finalize } from 'rxjs';
 import { RagApiService } from './api/rag-api.service';
-import { ChatMessage } from './models/rag.models';
+import { ChatMessage, DocumentListItem } from './models/rag.models';
 
 @Component({
   selector: 'app-root',
@@ -11,7 +11,7 @@ import { ChatMessage } from './models/rag.models';
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
-export class App {
+export class App implements OnInit {
   protected question = signal('');
   protected selectedFile = signal<File | null>(null);
   protected uploadStatus = signal('No document selected.');
@@ -19,9 +19,27 @@ export class App {
   protected isUploading = signal(false);
   protected isAsking = signal(false);
   protected messages = signal<ChatMessage[]>([]);
+  protected documents = signal<DocumentListItem[]>([]);
   protected readonly canAsk = computed(() => this.question().trim().length >= 3 && !this.isAsking());
 
   constructor(private readonly ragApi: RagApiService) {}
+
+  ngOnInit(): void {
+    this.loadDocuments();
+  }
+
+  protected loadDocuments(): void {
+    this.ragApi.listDocuments().subscribe({
+      next: (docs) => this.documents.set(docs),
+    });
+  }
+
+  protected deleteDocument(doc: DocumentListItem): void {
+    this.ragApi.deleteDocument(doc.document_id).subscribe({
+      next: () => this.documents.update((docs) => docs.filter((d) => d.document_id !== doc.document_id)),
+      error: (err: unknown) => this.showApiError(err, 'Could not delete document.'),
+    });
+  }
 
   /** Capture the selected file; uploading happens only after the user clicks Index. */
   protected chooseFile(event: Event): void {
@@ -41,14 +59,41 @@ export class App {
     this.isUploading.set(true);
     this.uploadStatus.set('Extracting text, embedding chunks, and indexing…');
     this.ragApi.uploadDocument(file).pipe(finalize(() => this.isUploading.set(false))).subscribe({
-      next: (response) => this.uploadStatus.set(
-        response.duplicate ? `${response.filename} was already indexed.` : `${response.filename} indexed: ${response.chunks_indexed} chunks.`,
-      ),
+      next: (response) => {
+        if (response.status === 'processing') {
+          this.uploadStatus.set(`${response.filename} queued for background indexing…`);
+          this.pollDocumentStatus(response.document_id, response.filename);
+        } else {
+          this.uploadStatus.set(
+            response.duplicate ? `${response.filename} was already indexed.` : `${response.filename} indexed: ${response.chunks_indexed} chunks.`,
+          );
+        }
+        this.loadDocuments();
+      },
       error: (error: unknown) => this.showApiError(error, 'Document upload failed.'),
     });
   }
 
-  /** Add the user question immediately, then append the cited assistant answer. */
+  /** Poll the document detail endpoint until a background task finishes. */
+  private pollDocumentStatus(documentId: string, filename: string): void {
+    const interval = setInterval(() => {
+      this.ragApi.getDocument(documentId).subscribe({
+        next: (doc) => {
+          if (doc.status === 'indexed') {
+            clearInterval(interval);
+            this.uploadStatus.set(`${filename} indexed: ${doc.chunk_count} chunks.`);
+            this.loadDocuments();
+          } else if (doc.status === 'failed') {
+            clearInterval(interval);
+            this.uploadStatus.set(`${filename} failed: ${doc.error_message ?? 'unknown error'}.`);
+            this.loadDocuments();
+          }
+        },
+      });
+    }, 2000);
+  }
+
+  /** Add the user question immediately, then stream the assistant answer token-by-token. */
   protected ask(): void {
     const question = this.question().trim();
     if (question.length < 3 || this.isAsking()) return;
@@ -56,12 +101,36 @@ export class App {
     this.messages.update((messages) => [...messages, { role: 'user', content: question }]);
     this.question.set('');
     this.isAsking.set(true);
-    this.ragApi.askQuestion(question).pipe(finalize(() => this.isAsking.set(false))).subscribe({
-      next: (response) => this.messages.update((messages) => [...messages, {
-        role: 'assistant', content: response.answer, citations: response.citations, requestId: response.request_id,
-      }]),
-      error: (error: unknown) => this.showApiError(error, 'Question could not be answered.'),
-    });
+
+    // Add a placeholder assistant message that fills in as tokens arrive.
+    this.messages.update((msgs) => [...msgs, { role: 'assistant', content: '' }]);
+
+    this.ragApi.streamQuestion(
+      question,
+      (event) => {
+        if (event.token) {
+          this.messages.update((msgs) => {
+            const updated = [...msgs];
+            const last = { ...updated[updated.length - 1] };
+            last.content += event.token;
+            updated[updated.length - 1] = last;
+            return updated;
+          });
+        }
+        if (event.citations) {
+          this.messages.update((msgs) => {
+            const updated = [...msgs];
+            const last = { ...updated[updated.length - 1] };
+            last.citations = event.citations;
+            last.requestId = event.request_id;
+            updated[updated.length - 1] = last;
+            return updated;
+          });
+        }
+      },
+      () => this.isAsking.set(false),
+      (err) => { this.error.set(err); this.isAsking.set(false); },
+    );
   }
 
   /** Convert FastAPI's useful `detail` field into a friendly visible error. */
