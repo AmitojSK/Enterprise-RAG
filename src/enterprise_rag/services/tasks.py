@@ -1,5 +1,6 @@
 """Celery tasks for background document ingestion."""
 
+import base64
 import logging
 from datetime import datetime, timezone
 from uuid import UUID
@@ -20,11 +21,16 @@ settings = get_settings()
 celery_app = Celery("enterprise_rag", broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.task_track_started = True
 
+# The worker process must create the schema that the API also uses.
+from enterprise_rag.database import initialize_database  # noqa: E402
+initialize_database()
+
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=10)
-def ingest_document_task(self, document_id: str, filename: str, content_bytes: bytes) -> dict:
+def ingest_document_task(self, document_id: str, filename: str, content_b64: str) -> dict:
     """Parse, chunk, embed, and index a document outside the HTTP request cycle."""
 
+    content_bytes = base64.b64decode(content_b64)
     db = SessionLocal()
     try:
         record = db.get(DocumentRecord, document_id)

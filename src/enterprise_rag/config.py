@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     chat_model: str = "gpt-4o-mini"
     # SQLite keeps the project runnable locally. Render will provide a
     # postgresql+psycopg:// URL through its secret environment variables.
-    database_url: str = "sqlite:///./enterprise_rag.db"
+    database_url: str = "sqlite:///./data/enterprise_rag.db"
     # Cloud vector writes can exceed the client library's short default timeout.
     qdrant_timeout_seconds: int = 60
     indexing_batch_size: int = 32

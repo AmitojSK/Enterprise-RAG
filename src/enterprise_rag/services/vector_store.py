@@ -1,5 +1,6 @@
 """Qdrant repository for the shared public document library."""
 
+import logging
 from dataclasses import dataclass
 import time
 from uuid import UUID, uuid5
@@ -22,6 +23,9 @@ class RetrievedChunk:
 
 class VectorStoreUnavailable(RuntimeError):
     """Raised when a cloud vector write is still unavailable after safe retries."""
+
+
+logger = logging.getLogger(__name__)
 
 
 class QdrantStore:
@@ -117,6 +121,8 @@ class QdrantStore:
         # This also ensures the payload indexes exist for collections created
         # before the first query, including collections already in Qdrant Cloud.
         self.ensure_collection(len(vector))
+        info = self.client.get_collection(self.collection)
+        logger.info("Collection '%s' has %s indexed points", self.collection, info.points_count)
         conditions: list[models.FieldCondition] = []
         if document_ids:
             conditions.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))
@@ -125,7 +131,9 @@ class QdrantStore:
             query=vector,
             query_filter=models.Filter(must=conditions) if conditions else None,
             limit=limit,
+            with_payload=True,
         ).points
+        logger.info("query_points returned %d results (limit=%d, filter=%s)", len(results), limit, bool(document_ids))
         return [
             RetrievedChunk(
                 document_id=item.payload["document_id"],

@@ -1,6 +1,7 @@
 """The retrieval-augmented generation orchestration service."""
 
 import json
+import logging
 from collections.abc import Iterator
 
 from openai import OpenAI
@@ -8,6 +9,8 @@ from enterprise_rag.config import Settings
 from enterprise_rag.schemas import Citation
 from enterprise_rag.services.embeddings import OpenAIEmbeddingService
 from enterprise_rag.services.vector_store import QdrantStore, RetrievedChunk
+
+logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -54,8 +57,14 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
         """Retrieve candidates and rerank them."""
 
         query_vector = self.embeddings.embed([question])[0]
+        logger.info("Embedded question into %d-dim vector", len(query_vector))
         chunks = self.store.search(query_vector, self.settings.top_k, document_ids)
-        return self._rerank(question, chunks)
+        logger.info("Search returned %d chunks", len(chunks))
+        if chunks:
+            logger.info("Top chunk score=%.4f, file=%s", chunks[0].score, chunks[0].filename)
+        reranked = self._rerank(question, chunks)
+        logger.info("After rerank: %d chunks", len(reranked))
+        return reranked
 
     @staticmethod
     def _build_context(chunks: list[RetrievedChunk]) -> str:

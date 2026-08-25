@@ -1,5 +1,6 @@
 """Public HTTP endpoints for document ingestion and grounded questions."""
 
+import base64
 import hashlib
 import json
 import logging
@@ -96,7 +97,7 @@ async def ingest_document(
     # Dispatch to Celery when a broker is available; fall back to synchronous.
     if _celery_available():
         from enterprise_rag.services.tasks import ingest_document_task
-        ingest_document_task.delay(record.id, filename, content)
+        ingest_document_task.delay(record.id, filename, base64.b64encode(content).decode("ascii"))
         return IngestResponse(
             document_id=record.id, filename=filename, chunks_indexed=0, status="processing",
         )
