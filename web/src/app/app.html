@@ -70,7 +70,14 @@
       </div>
       <div class="composer">
         <label for="question" class="sr-only">Question</label>
-        <textarea id="question" rows="3" placeholder="Ask a question about your indexed documents…" [ngModel]="question()" (ngModelChange)="question.set($event)" (keydown.control.enter)="ask()"></textarea>
+        <textarea
+          id="question"
+          rows="3"
+          placeholder="Ask a question about your indexed documents…"
+          [ngModel]="question()"
+          (ngModelChange)="question.set($event)"
+          (keydown.enter)="onComposerKeydown($event)">
+        </textarea>
         <button class="primary" [disabled]="!canAsk()" (click)="ask()">{{ isAsking() ? 'Searching…' : 'Ask question' }}</button>
       </div>
       @if (error()) { <p class="error" role="alert">{{ error() }}</p> }

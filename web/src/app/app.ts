@@ -93,6 +93,16 @@ export class App implements OnInit {
     }, 2000);
   }
 
+  /** Submit the current prompt when Enter is pressed, while allowing Shift+Enter for multiline input. */
+  protected onComposerKeydown(event: Event): void {
+    const keyboardEvent = event as KeyboardEvent;
+    if (keyboardEvent.shiftKey || keyboardEvent.key !== 'Enter') {
+      return;
+    }
+    keyboardEvent.preventDefault();
+    this.ask();
+  }
+
   /** Add the user question immediately, then stream the assistant answer token-by-token. */
   protected ask(): void {
     const question = this.question().trim();
