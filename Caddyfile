@@ -1,0 +1,17 @@
+# TLS termination and the only public entry point for the RAG stack.
+#
+# SITE_ADDRESS controls the mode:
+#   a hostname (rag.example.com)  -> automatic Let's Encrypt certificate
+#   :80                           -> plain HTTP, no certificate
+{$SITE_ADDRESS} {
+	encode gzip
+
+	# Caddy detects text/event-stream and stops buffering automatically, so
+	# the token-by-token /v1/query/stream response reaches the browser live.
+	reverse_proxy web:80
+
+	log {
+		output stderr
+		format console
+	}
+}

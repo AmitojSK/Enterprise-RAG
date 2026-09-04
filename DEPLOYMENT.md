@@ -1,283 +1,293 @@
-# Deploying Enterprise RAG to Render
+# Deploying Enterprise RAG to the Hostinger VPS
 
-A step-by-step guide to putting this project online for free. Follow the phases
-in order — each one produces a value the next phase needs.
+The whole stack runs on one server: no cold starts, no expiring free database,
+and the Celery worker restored so ingestion is genuinely asynchronous.
 
-Budget about 45 minutes end to end, most of it waiting on builds.
-
----
-
-## 1. Target architecture
-
-Five pieces, three of them outside Render:
-
-| Piece | Where it runs | Plan | Notes |
-| --- | --- | --- | --- |
-| **API** (FastAPI) | Render **Web Service**, Docker runtime | Free | Built from the repo-root `Dockerfile` |
-| **Frontend** (Angular) | Render **Static Site** | Free | Zero instance-hours; never sleeps |
-| **Metadata DB** | Render **PostgreSQL** | Free | ⚠️ Render deletes free databases 30 days after creation — see [§7](#7-known-limitations) |
-| **Vector DB** | **Qdrant Cloud** | Free (1 GB) | Render has no vector database offering |
-| **LLM + embeddings** | **OpenAI API** | Pay-as-you-go | The only piece that costs real money |
-
-Deliberately **not** deployed: the Celery worker and Redis broker. Render's
-background workers require a paid plan, and this stack falls back to
-synchronous ingestion when no broker is configured (see [§7](#7-known-limitations)).
-
-Because the frontend is a static site, the browser calls the API on its own
-origin rather than through a proxy. That makes CORS load-bearing: the API's
-`ALLOWED_ORIGINS` must list the static site's URL, and the static site's build
-must bake in the API's URL. Phases 4 and 6 wire up those two halves.
+The one real constraint is memory. This VPS already runs the food-delivery
+stack, so [phase 1](#1-memory-gate--do-this-first) is a hard gate: if the
+numbers come back badly, stop there rather than pushing on and taking down a
+project that is already live.
 
 ---
 
-## 2. Prerequisites
+## 0. Target architecture
 
-1. **Push this branch to GitHub.** Render deploys from the repo; it cannot see
-   your local working tree.
-   ```bash
-   git push origin develop
-   ```
-2. **An OpenAI API key** with billing enabled — <https://platform.openai.com/api-keys>.
-3. **A Render account** connected to your GitHub account — <https://dashboard.render.com>.
+Seven containers on `200.234.45.38`, one network, one public entry point.
+
+```
+internet ──▶ caddy :80/:443  (TLS, the only published ports)
+                  │
+                  ▼
+             web  (nginx: serves the Angular bundle, proxies /v1/ ──▶ api)
+                  │
+                  ▼
+             api  (FastAPI) ──┬──▶ postgres   document metadata
+                              ├──▶ qdrant     vectors
+                              └──▶ redis      Celery broker
+                                      ▲
+             worker (Celery) ─────────┘   parses, embeds, indexes
+```
+
+Postgres, Qdrant, and Redis publish **no ports**. They are reachable only from
+inside the Docker network. This is deliberately unlike the food-delivery
+infrastructure on this same box, where MySQL, Redis, and an unauthenticated
+Kafka are exposed to the whole internet — a gap your own handoff document flags.
+
+Because nginx proxies `/v1/` to the API, the browser sees a single origin.
+CORS is not involved at all, and neither is the `render` Angular build
+configuration — the deployed bundle is a plain `production` build.
+
+**Cost:** nothing beyond the VPS you already pay for, plus OpenAI usage.
 
 ---
 
-## 3. Create the Qdrant Cloud cluster
+## 1. Memory gate — do this first
 
-1. Sign up at <https://cloud.qdrant.io> (free tier, no card required).
-2. **Create a free cluster.** Pick the region geographically closest to the
-   Render region you will choose in phase 4 — every retrieval crosses this hop,
-   so a mismatched pair adds latency to every single question.
-3. When the cluster is running, copy two values:
-   - the **endpoint URL**, of the form `https://<id>.<region>.aws.cloud.qdrant.io:6333`
-     (keep the `:6333` — this project talks REST, not gRPC)
-   - a freshly created **API key**
+The Hostinger panel reports **77% memory used** on a 4 GB KVM 1. If that is
+real rather than reclaimable cache, this stack will not fit. Find out:
 
-Keep both to hand; they become `QDRANT_URL` and `QDRANT_API_KEY`.
+```bash
+ssh root@200.234.45.38 'free -h; echo "--- containers ---"; docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}"; echo "--- swap ---"; swapon --show'
+```
 
----
+Read the **`available`** column of `free -h`, not `used` — Linux counts page
+cache as used, and Hostinger's gauge probably does too.
 
-## 4. Create the Postgres database and the API service
-
-### 4a. Postgres
-
-Render dashboard → **New +** → **Postgres**.
-
-| Field | Value |
+| `available` | Verdict |
 | --- | --- |
-| Name | `enterprise-rag-db` |
-| Database | `enterprise_rag` |
-| Region | **Pick one and remember it** — the API must use the same region |
-| Plan | Free |
+| **> 1.5 GB** | Proceed. Comfortable. |
+| **0.8 – 1.5 GB** | Proceed, but add swap in phase 2 and treat it as required. |
+| **< 0.8 GB** | **Stop.** See [§9](#9-if-memory-is-too-tight). |
 
-Once it is available, open the database page and copy the **Internal Database
-URL**. Use the *internal* one, not the external: it is faster, it does not
-count against bandwidth, and it only works from services in the same region.
+The stack needs roughly 800 MB–1 GB at rest. The `mem_limit` values in
+`docker-compose.prod.yml` cap it at 1.5 GB so it can never starve the
+food-delivery containers, but a cap is not a reservation — the memory has to
+actually exist.
 
-> The URL Render gives you starts with `postgresql://`, which SQLAlchemy reads
-> as a request for psycopg 2 — a driver this project does not install. You do
-> **not** need to rewrite it by hand: `database.py` normalizes the scheme to
-> `postgresql+psycopg://` on startup. Paste the URL exactly as Render gives it.
+**Expect Kafka to be the biggest consumer.** It is a JVM and routinely holds
+1–1.5 GB. If food-delivery is not being actively demoed, stopping Kafka alone
+may free everything this project needs.
 
-### 4b. API web service
+---
 
-Render dashboard → **New +** → **Web Service** → connect this repository.
+## 2. Add swap
 
-| Field | Value |
-| --- | --- |
-| Name | `enterprise-rag-api` |
-| Region | **The same region as the database** |
-| Branch | `develop` |
-| Root Directory | *(leave blank — the Dockerfile is at the repo root)* |
-| Language | **Docker** |
-| Dockerfile Path | `./Dockerfile` |
-| Instance Type | Free |
-| Health Check Path | `/healthz` |
+Do this even if memory looks fine. The Angular production build is the
+memory-hungriest step of the whole deployment — far heavier than anything at
+runtime — and on a 1 vCPU box it will fail without headroom.
 
-Then add the environment variables:
+```bash
+ssh root@200.234.45.38 'fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo "/swapfile none swap sw 0 0" >> /etc/fstab && free -h'
+```
+
+The disk has 45 GB free, so 4 GB costs nothing you need. The `/etc/fstab` line
+makes it survive a reboot. Skip this if `swapon --show` already listed a swap
+file in phase 1.
+
+---
+
+## 3. Get the code onto the server
+
+```bash
+ssh root@200.234.45.38
+```
+
+```bash
+mkdir -p /opt/enterprise-rag && git clone -b develop https://github.com/AmitojSK/Enterprise-rag.git /opt/enterprise-rag && cd /opt/enterprise-rag
+```
+
+If the repository is private, generate a deploy key on the VPS
+(`ssh-keygen -t ed25519`) and add the public half under the repository's
+**Settings → Deploy keys** on GitHub, then clone over SSH instead.
+
+---
+
+## 4. Write the secrets file
+
+Still on the VPS, in `/opt/enterprise-rag`:
+
+```bash
+cp .env.prod.example .env && openssl rand -base64 24 | tr -d '/+=' | head -c 32 | xargs -I{} sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD={}|" .env && chmod 600 .env && nano .env
+```
+
+That generates the Postgres password and locks the file to root. In the editor,
+fill in the two remaining values:
 
 | Key | Value |
 | --- | --- |
-| `DATABASE_URL` | The **Internal Database URL** from 4a |
 | `OPENAI_API_KEY` | Your OpenAI key |
-| `QDRANT_URL` | The Qdrant endpoint from phase 3, including `:6333` |
-| `QDRANT_API_KEY` | The Qdrant API key from phase 3 |
-| `QDRANT_COLLECTION` | `enterprise_documents` |
-| `REDIS_URL` | *(empty string — this is what disables background ingestion)* |
-| `MAX_UPLOAD_BYTES` | `4194304` |
-| `ALLOWED_ORIGINS` | `http://localhost:4200` — corrected in phase 6 |
-| `CHAT_MODEL` | `gpt-4o-mini` |
-| `LOG_LEVEL` | `INFO` |
+| `SITE_ADDRESS` | `srv1952923.hstgr.cloud`, or `:80` to skip HTTPS for now |
 
-`REDIS_URL` must be present and **empty**, not absent. Absent falls back to the
-`redis://localhost:6379/0` default, and every upload then wastes time probing a
-broker that is not there before giving up and ingesting inline.
+`SITE_ADDRESS` is what decides HTTPS. Given a hostname, Caddy requests a Let's
+Encrypt certificate on first boot and renews it forever with no further
+involvement. Given `:80`, it serves plain HTTP. Start with the hostname — if
+the certificate fails, fall back to `:80` and diagnose from there.
 
-`MAX_UPLOAD_BYTES` is lowered from the 10 MB default to 4 MB on purpose. With
-no worker, parsing and embedding happen inside the HTTP request, and a large
-PDF can outlast the platform's request timeout.
+Do **not** set `DATABASE_URL`, `QDRANT_URL`, or `REDIS_URL`. Compose derives
+them from the internal service names and will override anything you put here.
 
-Deploy. The first build takes several minutes. When it is live, **copy the
-service URL** — something like `https://enterprise-rag-api.onrender.com` — and
-verify it:
-
-```bash
-curl https://enterprise-rag-api.onrender.com/healthz
-```
-
-Expect `{"status":"ok"}`. If this is the first request in a while, the free
-instance is asleep and the call may hang for 50–90 seconds before answering.
+> **Set `POSTGRES_PASSWORD` before the first `up`, and do not change it after.**
+> Postgres only applies that variable when it initializes an empty data
+> directory. Once `pg_data` exists, editing the value in `.env` changes what the
+> API *sends* but not what the database *expects*, and every service then dies
+> with `password authentication failed for user "rag"`. If you must rotate it,
+> change it inside the database with `ALTER USER rag WITH PASSWORD ...` and
+> update `.env` to match — or destroy the volume with `down -v`, which also
+> destroys every indexed document.
 
 ---
 
-## 5. Point the frontend at the API
+## 5. Open the firewall
 
-The static site has no reverse proxy, so the API's origin is compiled into the
-Angular bundle at build time. Edit one line:
-
-**`web/src/environments/environment.render.ts`**
-
-```ts
-export const environment = {
-  apiBaseUrl: 'https://enterprise-rag-api.onrender.com',  // ← your API URL from phase 4b
-};
-```
-
-No trailing slash. This is a public URL, not a secret, so committing it is fine.
+Only the two web ports. Everything else stays internal.
 
 ```bash
-git add web/src/environments/environment.render.ts
-git commit -m "point the deployed frontend at the Render API"
-git push origin develop
+ufw allow 80/tcp && ufw allow 443/tcp && ufw status
 ```
+
+Port 80 is not optional even if you only want HTTPS: Let's Encrypt validates
+over HTTP before it will issue the certificate.
+
+Check the output for a conflict — if food-delivery already has something on 80
+or 443, Caddy will fail to bind and phase 6 stops immediately.
 
 ---
 
-## 6. Create the static site, then fix CORS
+## 6. Build and start
 
-### 6a. Static site
-
-Render dashboard → **New +** → **Static Site** → same repository.
-
-| Field | Value |
-| --- | --- |
-| Name | `enterprise-rag-web` |
-| Branch | `develop` |
-| Root Directory | `web` |
-| Build Command | `npm ci && npm run build -- --configuration render` |
-| Publish Directory | `dist/web/browser` |
-
-The `render` build configuration is what swaps `environment.ts` for
-`environment.render.ts`. Building with plain `production` instead produces a
-bundle that calls its own origin and every request 404s.
-
-**Add the SPA rewrite rule.** On the service's **Redirects/Rewrites** tab:
-
-| Source | Destination | Action |
-| --- | --- | --- |
-| `/*` | `/index.html` | **Rewrite** |
-
-Without this, the root page works but refreshing any deeper route returns 404,
-because Angular's routes have no matching files on disk.
-
-Deploy, then copy the static site's URL — something like
-`https://enterprise-rag-web.onrender.com`.
-
-### 6b. Close the CORS loop
-
-Go back to the **API** service → **Environment**, and set:
-
-| Key | Value |
-| --- | --- |
-| `ALLOWED_ORIGINS` | `https://enterprise-rag-web.onrender.com` |
-
-Exact scheme and host, no trailing slash, no path. Comma-separate if you want
-to keep local development working too:
-
-```
-https://enterprise-rag-web.onrender.com,http://localhost:4200
+```bash
+cd /opt/enterprise-rag && docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-Saving the variable redeploys the API automatically. Wait for it to go green.
+The first run takes **10–20 minutes**, nearly all of it the Angular build on a
+single vCPU. It will look frozen. It is not.
+
+> **If the `web` build fails or the box locks up**, it is the Angular
+> compilation, not the stack. Node needs more memory than a 1 vCPU VPS
+> comfortably has. Two ways out: retry with `NODE_OPTIONS=--max-old-space-size=2048`
+> prefixed to the command, or build that image on your laptop and push it to
+> GHCR (the same registry the food-delivery project already publishes to), then
+> replace `build: ./web` with `image: ghcr.io/amitojsk/enterprise-rag-web:latest`
+> and re-run. The API image is small and always builds fine on the VPS.
+
+Watch it come up:
+
+```bash
+docker compose -f docker-compose.prod.yml ps && docker compose -f docker-compose.prod.yml logs -f --tail=40 api worker
+```
+
+Expect `Application startup complete` from the API and `celery@... ready` from
+the worker. Then confirm from your own machine:
+
+```bash
+curl https://srv1952923.hstgr.cloud/healthz
+```
+
+Expect `{"status":"ok"}` — immediately, with no cold-start delay ever.
 
 ---
 
 ## 7. Smoke test
 
-1. **Wake the API first.** `curl https://enterprise-rag-api.onrender.com/healthz`
-   and wait for the response. Doing this before opening the UI turns a
-   confusing 90-second hang into a normal-looking page.
-2. Open the static site URL.
-3. Upload a small text-bearing PDF (under 4 MB). Expect a `201` and the
-   document appearing with status `indexed`.
-   - *Nothing happens and the browser console shows a CORS error* → phase 6b.
-   - *`503` mentioning the vector store* → `QDRANT_URL` or `QDRANT_API_KEY`.
-   - *`422` about no readable text* → the PDF is scanned images; there is no OCR
-     in this pipeline. Try a text PDF.
-4. Ask a question about the document. Expect a streamed answer with citations.
-5. Delete the document and confirm it disappears from the list.
+1. Open `https://srv1952923.hstgr.cloud` in a browser.
+2. Upload a text-bearing PDF. It should return **immediately** with status
+   `processing`, and flip to `indexed` on its own a few seconds later — the
+   frontend polls for you. That transition is the worker doing its job, and is
+   the part Render's free tier could not have shown at all.
+3. Watch it happen server-side:
+   ```bash
+   docker compose -f docker-compose.prod.yml logs -f worker
+   ```
+4. Ask a question. Expect an answer streaming in token by token, with citations.
+5. Delete the document and confirm it disappears.
+
+Then check what the stack actually costs you in memory:
+
+```bash
+docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}"
+```
 
 ---
 
-## 8. Known limitations
+## 8. Operating it
 
-These are properties of the free-tier deployment, not bugs to chase.
+**Deploy a change:**
+```bash
+cd /opt/enterprise-rag && git pull && docker compose -f docker-compose.prod.yml up -d --build
+```
 
-**The free Postgres database expires.** Render deletes free PostgreSQL
-instances **30 days after creation**. When that happens the API stays up but
-every document operation fails. Set a calendar reminder. To make the demo
-durable, either move to Render's paid database, or switch `DATABASE_URL` to a
-free-forever host such as Neon or Supabase — no code change is needed, since
-`database.py` normalizes any `postgresql://` URL.
+**Logs:**
+```bash
+docker compose -f docker-compose.prod.yml logs -f --tail=100 api worker
+```
 
-**The API sleeps after 15 minutes of inactivity.** The first request afterwards
-takes 50–90 seconds. The static frontend does not sleep, so the page loads
-instantly and then appears to hang on its first API call. Warm the API with a
-`/healthz` call a couple of minutes before any demo.
+**Back up Postgres** (the volume is the only copy of your document metadata):
+```bash
+docker compose -f docker-compose.prod.yml exec -T postgres pg_dump -U rag enterprise_rag | gzip > ~/rag-backup-$(date +%F).sql.gz
+```
 
-**Free instance-hours are shared across your whole Render workspace** — 750 per
-month, pooled across every service in the account, including unrelated
-projects. The static site consumes none, so this deployment adds exactly one
-service's worth of draw.
+**Stop everything** without deleting data:
+```bash
+docker compose -f docker-compose.prod.yml down
+```
+Add `-v` only if you genuinely want the documents and vectors destroyed.
 
-**Ingestion is synchronous.** With `REDIS_URL` empty, uploads are parsed,
-chunked, embedded, and indexed inside the HTTP request. A large document can
-outlast the request timeout, which is why `MAX_UPLOAD_BYTES` is 4 MB here. The
-Celery path in `services/tasks.py` is intact and is what runs under Docker
-Compose locally — restoring it in production needs a paid Render background
-worker plus a Redis instance for the broker.
+---
+
+## 9. If memory is too tight
+
+In rough order of preference:
+
+1. **Stop Kafka when not demoing food-delivery.** Almost certainly the single
+   largest consumer on the box, and easily the cheapest 1 GB you will ever
+   reclaim.
+2. **Drop the Celery worker.** Delete the `worker` service from
+   `docker-compose.prod.yml` and set `REDIS_URL=` (empty) in `.env`; the API
+   falls back to synchronous ingestion. Saves ~380 MB, and also lets you drop
+   Redis. Costs you the async architecture, which is much of why option A was
+   worth doing.
+3. **Move the vector store to Qdrant Cloud.** The free 1 GB tier is genuinely
+   free forever. Delete the `qdrant` service and point `QDRANT_URL` /
+   `QDRANT_API_KEY` at the cloud cluster. Saves ~380 MB, and unlike the
+   Render/VPS split this hop is not in a latency-critical loop with a second
+   remote dependency.
+4. **Upgrade to KVM 2.** 8 GB removes the problem entirely.
+
+---
+
+## 10. Known limitations
+
+**Single point of failure.** One box runs both projects. A reboot, a full disk,
+or an OOM kill takes down everything at once. There is no redundancy.
 
 **The API has no authentication and the library is shared.** Every visitor can
-read, upload, and delete every document. This is deliberate for a portfolio
-demo and is called out in `routes.py`. Do not put anything confidential in it,
-and add authentication before pointing real users at it.
+read, upload, and delete every document — deliberate for a portfolio demo, and
+flagged in `routes.py`. Now that it is on a permanent public URL rather than a
+sleeping free instance, this matters more: add authentication before pointing
+real users at it.
 
 **Uploads cost money.** Every ingestion calls OpenAI's embedding API and every
-question calls the chat API against your key. A public URL with no
-authentication is a public spend endpoint — set a billing limit on the OpenAI
-account, and take the site down when you are not demoing it.
+question calls the chat API against your key. A public, unauthenticated URL is
+a public spend endpoint. Set a billing limit on the OpenAI account.
+
+**`create_all`, not migrations.** The schema is created on startup from the
+SQLAlchemy models. That is fine for the current single-table schema, but a
+future model change will not migrate existing rows — introduce Alembic before
+the schema changes in anger.
+
+**No automated backups.** The `pg_dump` in [§8](#8-operating-it) is manual.
+Hostinger's own snapshot feature covers the whole VPS and is the easier win.
 
 ---
 
-## 9. Environment variable reference
+## Appendix: the Render path
 
-Everything the API reads, with its default from `config.py`.
+The repository still supports deploying to Render instead — `Dockerfile` binds
+the platform-assigned `PORT`, `database.py` normalizes managed `postgres://`
+URLs, `ALLOWED_ORIGINS` drives CORS for a separate-origin frontend, and the
+`render` Angular build configuration bakes an absolute API origin into the
+bundle for a static site.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OPENAI_API_KEY` | *(empty)* | Embeddings and chat completions |
-| `DATABASE_URL` | local SQLite file | Document metadata; `postgres://` and `postgresql://` are normalized to psycopg 3 |
-| `QDRANT_URL` | `http://localhost:6333` | Vector store endpoint |
-| `QDRANT_API_KEY` | *(none)* | Required by Qdrant Cloud, unused locally |
-| `QDRANT_COLLECTION` | `enterprise_documents` | Collection name |
-| `QDRANT_TIMEOUT_SECONDS` | `60` | Raise if cloud writes time out |
-| `INDEXING_BATCH_SIZE` | `32` | Vectors per upsert request |
-| `REDIS_URL` | `redis://localhost:6379/0` | Celery broker; **empty disables background ingestion** |
-| `ALLOWED_ORIGINS` | `http://localhost:4200,http://127.0.0.1:4200` | Comma-separated CORS origins |
-| `MAX_UPLOAD_BYTES` | `10485760` | Upload size ceiling |
-| `TOP_K` / `RERANK_K` | `20` / `8` | Candidates retrieved, then kept |
-| `SCORE_THRESHOLD` | `0.25` | Minimum similarity to cite |
-| `CHAT_MODEL` | `gpt-4o-mini` | Answer generation model |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
-| `LOG_LEVEL` | `INFO` | Root log level |
-| `PORT` | `8000` | Set by Render; the container binds it automatically |
+None of that is used by this VPS deployment, and none of it is in the way. It
+is kept as a fallback: it costs nothing to carry, and it is the escape hatch if
+this VPS ever runs out of room.

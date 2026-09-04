@@ -1,0 +1,105 @@
+# Production stack for the Hostinger VPS.
+#
+# Differs from docker-compose.yml in four ways that matter:
+#   1. Only Caddy publishes ports. Postgres, Qdrant, and Redis are reachable
+#      only from inside this Docker network, never from the public internet.
+#   2. Every service declares a memory limit. This VPS also runs the
+#      food-delivery stack, and an unbounded container here would starve it.
+#   3. Secrets come from the environment rather than being written inline.
+#   4. Everything restarts on reboot.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rag
+      # Fails fast with a clear message if the VPS .env is missing.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: enterprise_rag
+    volumes: ["pg_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d enterprise_rag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 192m
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    volumes: ["qdrant_data:/qdrant/storage"]
+    restart: unless-stopped
+    mem_limit: 384m
+
+  redis:
+    image: redis:7-alpine
+    # This Redis is a Celery broker, not a datastore: persistence off, and a
+    # hard memory ceiling so a backlog of queued tasks cannot grow without
+    # bound and push the food-delivery containers into swap.
+    command: redis-server --save "" --appendonly no --maxmemory 64mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    mem_limit: 96m
+
+  api:
+    build: .
+    image: enterprise-rag:local
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://rag:${POSTGRES_PASSWORD}@postgres:5432/enterprise_rag
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres: {condition: service_healthy}
+      qdrant: {condition: service_started}
+      redis: {condition: service_started}
+    restart: unless-stopped
+    mem_limit: 384m
+
+  worker:
+    # Same image as the API; Compose builds it once and reuses it here.
+    build: .
+    image: enterprise-rag:local
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://rag:${POSTGRES_PASSWORD}@postgres:5432/enterprise_rag
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379/0
+    # One vCPU means one worker process. --max-tasks-per-child recycles it
+    # periodically so a slow leak in a parsing library cannot accumulate.
+    command: >
+      celery -A enterprise_rag.services.tasks:celery_app worker
+      --loglevel=info --concurrency=1 --max-tasks-per-child=20
+    depends_on:
+      postgres: {condition: service_healthy}
+      qdrant: {condition: service_started}
+      redis: {condition: service_started}
+    restart: unless-stopped
+    mem_limit: 384m
+
+  web:
+    build: ./web
+    # nginx serves the Angular bundle and proxies /v1/ to the api service, so
+    # the browser sees a single origin and CORS never enters the picture.
+    depends_on: [api]
+    restart: unless-stopped
+    mem_limit: 64m
+
+  caddy:
+    image: caddy:2-alpine
+    # The only service exposed to the internet. Obtains and renews a Let's
+    # Encrypt certificate automatically when SITE_ADDRESS is a real hostname.
+    ports: ["80:80", "443:443"]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web]
+    restart: unless-stopped
+    mem_limit: 64m
+
+volumes:
+  pg_data:
+  qdrant_data:
+  caddy_data:
+  caddy_config:
