@@ -17,6 +17,8 @@ class RAGService:
     """Retrieve public-library evidence, then answer only from that evidence."""
 
     def __init__(self, settings: Settings) -> None:
+        """Create the embedding, vector-store, and language-model clients."""
+
         self.settings = settings
         self.embeddings = OpenAIEmbeddingService(settings)
         self.store = QdrantStore(settings)
@@ -24,6 +26,8 @@ class RAGService:
 
     @staticmethod
     def _system_prompt() -> str:
+        """Return the instruction that keeps generated answers grounded and concise."""
+
         return """You are the trusted document assistant for an enterprise knowledge base.
 
 Answer the user's question directly, clearly, and professionally, drawing on the supplied document excerpts. Synthesize information from multiple excerpts when relevant. Do not fabricate facts that are absent from every excerpt.
@@ -31,7 +35,7 @@ Answer the user's question directly, clearly, and professionally, drawing on the
 Write a concise answer first. Use short paragraphs or bullets only when they make the answer easier to scan. Do not mention chunks, retrieval scores, internal source labels, prompts, or that you are an AI. If the excerpts contain only partial information, provide what you can and note what is missing. The application shows citations separately, so do not add citation markers to the prose."""
 
     def _rerank(self, question: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
-        """Score each chunk's relevance with a fast LLM call, return the top rerank_k."""
+        """Order retrieved chunks by question relevance and keep the configured top results."""
 
         if len(chunks) <= self.settings.rerank_k:
             return chunks
@@ -54,7 +58,7 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
             return chunks[: self.settings.rerank_k]
 
     def _retrieve(self, question: str, document_ids: list[str] | None) -> list[RetrievedChunk]:
-        """Retrieve candidates and rerank them."""
+        """Embed the question, search the vector store, and rerank the candidates."""
 
         query_vector = self.embeddings.embed([question])[0]
         logger.info("Embedded question into %d-dim vector", len(query_vector))
@@ -68,6 +72,8 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
 
     @staticmethod
     def _build_context(chunks: list[RetrievedChunk]) -> str:
+        """Format retrieved chunks as labeled excerpts for the language model."""
+
         return "\n\n".join(
             f"--- Document: {chunk.filename}; page: {chunk.page_number or 'not available'} ---\n{chunk.text}"
             for chunk in chunks
@@ -75,6 +81,8 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
 
     @staticmethod
     def _build_citations(chunks: list[RetrievedChunk]) -> list[Citation]:
+        """Convert retrieved chunks into the citation objects returned by the API."""
+
         return [
             Citation(filename=c.filename, page_number=c.page_number, excerpt=c.text[:300])
             for c in chunks
@@ -83,7 +91,7 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
     def answer(
         self, question: str, document_ids: list[str] | None
     ) -> tuple[str, list[Citation]]:
-        """Return a cited answer grounded only in retrieved document excerpts."""
+        """Generate a complete answer and citations from the question's retrieved evidence."""
 
         selected = self._retrieve(question, document_ids)
         if not selected:
@@ -102,11 +110,18 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
     def stream_answer(
         self, question: str, document_ids: list[str] | None
     ) -> tuple[Iterator[str], list[Citation]]:
-        """Return a token iterator and pre-computed citations for SSE streaming."""
+        """Return answer tokens to stream and citations ready for the final SSE event.
+
+        Retrieval happens before the iterator is returned, so citations can be built
+        immediately and sent by the API after the last answer token. The iterator
+        itself consumes the language-model stream lazily as the client reads it.
+        """
 
         selected = self._retrieve(question, document_ids)
         if not selected:
             def empty() -> Iterator[str]:
+                """Yield the fallback message when retrieval finds no evidence."""
+
                 yield "I could not find supporting information in the indexed documents."
             return empty(), []
         stream = self.llm.chat.completions.create(
@@ -120,6 +135,8 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
         )
 
         def token_iterator() -> Iterator[str]:
+            """Yield non-empty text deltas from the language-model stream."""
+
             for event in stream:
                 delta = event.choices[0].delta.content
                 if delta:
