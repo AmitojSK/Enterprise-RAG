@@ -11,11 +11,13 @@ settings = get_settings()
 logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 app = FastAPI(title="Enterprise RAG API", version="0.2.0", description="Public, cited document intelligence API.")
-# Angular's local development server uses port 4200. Keep this explicit rather
-# than allowing arbitrary websites to call the API.
+# Keep the allowed origins explicit rather than allowing arbitrary websites to
+# call the API. ALLOWED_ORIGINS defaults to Angular's local development server
+# and is overridden with the deployed frontend's URL in hosted environments.
+allowed_origins = [origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200"],
+    allow_origins=allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],

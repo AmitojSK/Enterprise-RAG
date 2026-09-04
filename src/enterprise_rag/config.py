@@ -25,7 +25,13 @@ class Settings(BaseSettings):
     # Cloud vector writes can exceed the client library's short default timeout.
     qdrant_timeout_seconds: int = 60
     indexing_batch_size: int = 32
+    # An empty value is an explicit opt-out from background ingestion: the API
+    # then parses and embeds uploads inside the request instead of enqueuing.
     redis_url: str = "redis://localhost:6379/0"
+    # Comma-separated browser origins allowed to call this API. A deployed
+    # frontend is served from a different origin than the API, so its URL must
+    # be listed here or the browser will block every request.
+    allowed_origins: str = "http://localhost:4200,http://127.0.0.1:4200"
     s3_bucket: str = ""
     s3_prefix: str = ""
 

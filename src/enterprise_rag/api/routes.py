@@ -33,8 +33,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["RAG"])
 
 
-def _celery_available() -> bool:
-    """Check whether the Celery broker (Redis) is reachable."""
+def _celery_available(settings: Settings) -> bool:
+    """Check whether the Celery broker (Redis) is reachable.
+
+    An empty ``REDIS_URL`` is an explicit opt-out rather than a misconfiguration:
+    deployments without a worker process (Render's free tier has none) ingest
+    synchronously, and probing an address we know is absent only adds latency.
+    """
+    if not settings.redis_url:
+        return False
     try:
         from enterprise_rag.services.tasks import celery_app
         conn = celery_app.connection()
@@ -94,7 +101,7 @@ async def ingest_document(
     db.commit()
 
     # Dispatch to Celery when a broker is available; fall back to synchronous.
-    if _celery_available():
+    if _celery_available(settings):
         from enterprise_rag.services.tasks import ingest_document_task
         ingest_document_task.delay(record.id, filename, base64.b64encode(content).decode("ascii"))
         return IngestResponse(

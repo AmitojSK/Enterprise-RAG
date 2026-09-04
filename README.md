@@ -110,6 +110,7 @@ docker-compose.yml        # Full stack orchestration
 
 ## Documentation
 
+- [Deploying to Render](DEPLOYMENT.md)
 - [Architecture](docs/architecture.md)
 - [Sequence Diagrams](docs/sequence-diagrams.md)
 - [Evaluation](docs/evaluation.md)
