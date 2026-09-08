@@ -32,8 +32,6 @@ class Settings(BaseSettings):
     # frontend is served from a different origin than the API, so its URL must
     # be listed here or the browser will block every request.
     allowed_origins: str = "http://localhost:4200,http://127.0.0.1:4200"
-    s3_bucket: str = ""
-    s3_prefix: str = ""
 
 
 @lru_cache

@@ -224,12 +224,3 @@ def query_stream(
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-
-@router.post("/documents/scan-s3", tags=["Connectors"])
-def scan_s3(settings: Settings = Depends(get_settings)) -> list[dict]:
-    """Scan the configured S3 bucket and index any new supported documents."""
-
-    if not settings.s3_bucket:
-        raise HTTPException(status_code=400, detail="S3_BUCKET is not configured")
-    from enterprise_rag.services.s3_loader import scan_and_enqueue
-    return scan_and_enqueue(settings)

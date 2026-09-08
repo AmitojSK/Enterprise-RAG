@@ -1,5 +1,7 @@
 # Local configuration and generated Python files must not enter source control.
 .env
+# Generated env block for pasting into the Render dashboard; holds real secrets.
+/render.env
 .venv/
 __pycache__/
 *.py[cod]

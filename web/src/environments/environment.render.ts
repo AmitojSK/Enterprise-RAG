@@ -7,5 +7,5 @@
  * it on Render, then commit — this is a public URL, not a secret.
  */
 export const environment = {
-  apiBaseUrl: 'https://REPLACE-WITH-YOUR-API.onrender.com',
+  apiBaseUrl: 'https://enterprise-rag-zkot.onrender.com',
 };

@@ -1,0 +1,38 @@
+# Postgres only, for the Hostinger VPS.
+#
+# This database is reached by a Render service over the public internet, which
+# makes it different from every other container on this box: it must publish a
+# port, so its password and its transport are the only things protecting it.
+# TLS is enabled below, and DEPLOYMENT.md scopes the firewall to Render's
+# outbound addresses rather than leaving 5432 open to the world.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: enterprise_rag
+    # The certificate is generated on the host before first start; Postgres
+    # refuses to boot if the key is group- or world-readable, or if it is not
+    # owned by the database user. That user is uid 70 in this alpine image,
+    # not the 999 used by the Debian-based postgres:16 — see DEPLOYMENT.md.
+    command: >
+      postgres
+      -c ssl=on
+      -c ssl_cert_file=/certs/server.crt
+      -c ssl_key_file=/certs/server.key
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./certs:/certs:ro
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d enterprise_rag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    # Sized to sit alongside the food-delivery stack without competing with it.
+    mem_limit: 256m
+
+volumes:
+  pg_data:
