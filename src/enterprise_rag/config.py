@@ -1,13 +1,23 @@
 """Central, validated configuration loaded from environment variables."""
 
 from functools import lru_cache
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Anchored to this file rather than the process working directory. A bare
+# ".env" is resolved relative to wherever the server happened to be started
+# from, so launching uvicorn from another directory silently loaded no
+# configuration at all and every setting fell back to its default -- pointing
+# the app at a different Qdrant collection and a different SQLite file without
+# reporting anything. Real environment variables still take precedence, so
+# containers and hosting platforms are unaffected.
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
     """Runtime settings. Keeping secrets in the environment avoids hard-coding them."""
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
     openai_api_key: str = ""
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None

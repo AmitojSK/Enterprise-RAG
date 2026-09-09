@@ -53,12 +53,19 @@ def _celery_available(settings: Settings) -> bool:
 
 
 @router.post("/documents", response_model=IngestResponse, status_code=status.HTTP_201_CREATED)
-async def ingest_document(
+def ingest_document(
     file: UploadFile = File(...),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> IngestResponse:
     """Validate, parse, chunk, embed, and index one document in the public library.
+
+    Declared ``def`` rather than ``async def`` on purpose. Every dependency this
+    endpoint touches is synchronous and blocking -- pypdf extraction, the OpenAI
+    client, the Qdrant client, and SQLAlchemy -- and an ``async def`` endpoint
+    runs on the event loop, so a single upload stalls every other request for as
+    long as indexing takes. FastAPI runs ``def`` endpoints in a threadpool
+    instead, which is what the rest of the routes in this module already rely on.
 
     This endpoint intentionally has no login for a portfolio demo. Do not host
     it for confidential or user-specific documents without adding authentication
@@ -68,7 +75,9 @@ async def ingest_document(
     filename = file.filename or "unnamed"
     if not any(filename.lower().endswith(suffix) for suffix in SUPPORTED_SUFFIXES):
         raise HTTPException(status_code=415, detail=f"Supported types: {sorted(SUPPORTED_SUFFIXES)}")
-    content = await file.read()
+    # ``file.file`` is the underlying spooled temporary file: the synchronous
+    # counterpart of ``await file.read()``, which is unavailable here.
+    content = file.file.read()
     if len(content) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="File is larger than MAX_UPLOAD_BYTES")
     # The fingerprint is based on bytes, not filename. Renaming the same PDF

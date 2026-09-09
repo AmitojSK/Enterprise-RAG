@@ -70,7 +70,13 @@ export class App implements OnInit {
         }
         this.loadDocuments();
       },
-      error: (error: unknown) => this.showApiError(error, 'Document upload failed.'),
+      error: (error: unknown) => {
+        // Clear the progress line too: showApiError only populates the error
+        // banner, so without this the status keeps claiming the document is
+        // still being indexed long after the request failed.
+        this.uploadStatus.set('Indexing failed.');
+        this.showApiError(error, 'Document upload failed.');
+      },
     });
   }
 
@@ -88,6 +94,14 @@ export class App implements OnInit {
             this.uploadStatus.set(`${filename} failed: ${doc.error_message ?? 'unknown error'}.`);
             this.loadDocuments();
           }
+        },
+        // Without this the timer runs forever once polling starts failing, and
+        // the status line stays on "queued" for a document that will never
+        // report back.
+        error: (error: unknown) => {
+          clearInterval(interval);
+          this.uploadStatus.set(`Lost track of ${filename} while it was indexing.`);
+          this.showApiError(error, 'Could not check indexing status.');
         },
       });
     }, 2000);
