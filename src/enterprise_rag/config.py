@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
     qdrant_collection: str = "enterprise_documents"
-    max_upload_bytes: int = 10 * 1024 * 1024
+    max_upload_bytes: int = 20 * 1024 * 1024
     top_k: int = 20
     rerank_k: int = 8
     score_threshold: float = 0.25

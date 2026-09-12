@@ -199,7 +199,7 @@ Then add the environment variables:
 | `QDRANT_API_KEY` | The Qdrant API key from phase 3 |
 | `QDRANT_COLLECTION` | `enterprise_documents_prod` — see below |
 | `REDIS_URL` | *(empty string — this is what disables background ingestion)* |
-| `MAX_UPLOAD_BYTES` | `4194304` |
+| `MAX_UPLOAD_BYTES` | `20971520` |
 | `ALLOWED_ORIGINS` | `http://localhost:4200` — corrected in phase 6 |
 | `CHAT_MODEL` | `gpt-4o-mini` |
 | `LOG_LEVEL` | `INFO` |
@@ -216,9 +216,12 @@ untouched. The API creates it automatically on the first upload.
 `redis://localhost:6379/0` default, and every upload then wastes time probing a
 broker that is not there before giving up and ingesting inline.
 
-`MAX_UPLOAD_BYTES` is lowered from the 10 MB default to 4 MB on purpose. With
-no worker, parsing and embedding happen inside the HTTP request, and a large
-PDF can outlast the platform's request timeout.
+`MAX_UPLOAD_BYTES` is 20 MB. With no worker, parsing and embedding happen
+inside the HTTP request, so the request stays open for the whole indexing run,
+and that run grows with the amount of extracted text rather than the file size.
+The cap still earns its place: the entire file is read into memory on a 512 MB
+instance, and the endpoint is public and unauthenticated, so an uncapped upload
+is both a memory risk and an open door to embedding spend.
 
 Deploy. The first build takes several minutes. When it is live, **copy the
 service URL** — something like `https://enterprise-rag-api.onrender.com` — and
@@ -311,7 +314,7 @@ Saving the variable redeploys the API automatically. Wait for it to go green.
    and wait for the response. Doing this before opening the UI turns a
    confusing 90-second hang into a normal-looking page.
 2. Open the static site URL.
-3. Upload a small text-bearing PDF (under 4 MB). Expect a `201` and the
+3. Upload a text-bearing PDF (under 20 MB). Expect a `201` and the
    document appearing with status `indexed`.
    - *Nothing happens and the browser console shows a CORS error* → phase 6b.
    - *`503` mentioning the vector store* → `QDRANT_URL` or `QDRANT_API_KEY`.
@@ -375,7 +378,8 @@ Expect the key's exact length, **0 lines**, and **HTTP 200**. A stray newline
 in that file makes the header malformed and curl reports `000` — pasting one
 line too many out of `.env` is an easy way to get there. Trim it with
 `head -1 file | tr -d '
-'` rather than re-pasting.
+
+'` rather than re-pasting.
 
 That is a mitigation, not a guarantee — Qdrant defines the inactivity rule, not
 you. Check the cluster is running before any demo regardless.
@@ -391,8 +395,9 @@ projects. The static site consumes none, so this deployment adds exactly one
 service's worth of draw.
 
 **Ingestion is synchronous.** With `REDIS_URL` empty, uploads are parsed,
-chunked, embedded, and indexed inside the HTTP request. A large document can
-outlast the request timeout, which is why `MAX_UPLOAD_BYTES` is 4 MB here. The
+chunked, embedded, and indexed inside the HTTP request. A large document keeps
+that request open for the whole run and is held in memory throughout, which is
+why `MAX_UPLOAD_BYTES` caps uploads at 20 MB. The
 Celery path in `services/tasks.py` is intact and is what runs under Docker
 Compose locally — restoring it in production needs a paid Render background
 worker plus a Redis instance for the broker.
@@ -435,7 +440,7 @@ Everything the API reads, with its default from `config.py`.
 | `INDEXING_BATCH_SIZE` | `32` | Vectors per upsert request |
 | `REDIS_URL` | `redis://localhost:6379/0` | Celery broker; **empty disables background ingestion** |
 | `ALLOWED_ORIGINS` | `http://localhost:4200,http://127.0.0.1:4200` | Comma-separated CORS origins |
-| `MAX_UPLOAD_BYTES` | `10485760` | Upload size ceiling |
+| `MAX_UPLOAD_BYTES` | `20971520` | Upload size ceiling (20 MB); nginx allows 21 MB so the API enforces it |
 | `TOP_K` / `RERANK_K` | `20` / `8` | Candidates retrieved, then kept |
 | `SCORE_THRESHOLD` | `0.25` | Minimum similarity to cite |
 | `CHAT_MODEL` | `gpt-4o-mini` | Answer generation model |

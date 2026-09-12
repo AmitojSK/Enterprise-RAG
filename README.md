@@ -93,7 +93,7 @@ Full step-by-step instructions, including the trade-offs and the failure modes w
 | Limitation | Consequence |
 |---|---|
 | API sleeps after 15 min idle | 50–90 s cold start on the first request |
-| No background worker on Render's free tier | Ingestion runs inside the request; uploads capped at 4 MB |
+| No background worker on Render's free tier | Ingestion runs inside the request; uploads capped at 20 MB |
 | Free Qdrant clusters suspend when idle | Retrieval fails with `503` until reactivated; a weekly keep-alive mitigates it |
 | No authentication | Anyone can upload, query, and delete — deliberate for a demo, unsuitable for real data |
 
