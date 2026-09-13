@@ -1,1 +1,5 @@
-/* You can add global styles to this file, and also import other style files */
+/* Global styles. The zero margin matters for layout: the app shell is pinned to
+   100vh, and the browser's default 8px body margin would otherwise push it past
+   the viewport and reintroduce a page-level scrollbar. */
+html, body { margin: 0; }
+body { background: #09111f; }

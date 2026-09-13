@@ -135,8 +135,15 @@ export class PdfViewer implements OnChanges, OnDestroy {
     if (!context) return;
     const container = canvas.parentElement;
     const unscaled = page.getViewport({ scale: 1 });
-    const targetWidth = container ? container.clientWidth : unscaled.width;
-    const scale = Math.max(targetWidth / unscaled.width, 0.2);
+    // Fit to the container's *content* width. clientWidth includes padding, so
+    // sizing the canvas to it makes the canvas wider than its box and the panel
+    // grows a horizontal scrollbar; subtract the padding to avoid that.
+    let available = unscaled.width;
+    if (container) {
+      const style = getComputedStyle(container);
+      available = container.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    }
+    const scale = Math.max(available / unscaled.width, 0.2);
     const viewport = page.getViewport({ scale });
 
     // Render at device pixel ratio for crisp text on high-DPI screens, then
