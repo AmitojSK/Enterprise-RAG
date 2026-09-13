@@ -13,6 +13,12 @@ from enterprise_rag.services.audit import log_ingestion
 from enterprise_rag.services.chunking import chunk_pages
 from enterprise_rag.services.document_loader import extract_pages
 from enterprise_rag.services.embeddings import OpenAIEmbeddingService
+from enterprise_rag.services.object_store import (
+    ObjectStore,
+    ObjectStoreUnavailable,
+    content_type_for,
+    storage_key,
+)
 from enterprise_rag.services.vector_store import QdrantStore
 
 logger = logging.getLogger(__name__)
@@ -58,6 +64,15 @@ def ingest_document_task(self, document_id: str, filename: str, content_b64: str
 
         embeddings = OpenAIEmbeddingService(settings).embed([c.text for c in chunks])
         QdrantStore(settings).upsert(document_id, filename, chunks, embeddings)
+        # Store the original bytes for the source viewer. A storage failure here
+        # must not fail ingestion -- the document is indexed and answerable -- so
+        # it is logged rather than raised.
+        try:
+            ObjectStore(settings).put(
+                storage_key(document_id, filename), content_bytes, content_type_for(filename)
+            )
+        except ObjectStoreUnavailable:
+            logger.warning("Indexed %s but could not store its original for viewing", document_id, exc_info=True)
 
         record.status = "indexed"
         record.chunk_count = len(chunks)

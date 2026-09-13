@@ -32,6 +32,11 @@ export class RagApiService {
     return this.http.delete<void>(`${apiBaseUrl}/v1/documents/${documentId}`);
   }
 
+  /** URL that streams a document's original bytes, for the PDF viewer to load. */
+  documentFileUrl(documentId: string): string {
+    return `${apiBaseUrl}/v1/documents/${documentId}/file`;
+  }
+
   /** Send a question to the RAG service and receive its cited response. */
   askQuestion(question: string): Observable<QueryResponse> {
     return this.http.post<QueryResponse>(

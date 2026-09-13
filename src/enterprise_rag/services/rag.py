@@ -84,7 +84,12 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
         """Convert retrieved chunks into the citation objects returned by the API."""
 
         return [
-            Citation(filename=c.filename, page_number=c.page_number, excerpt=c.text[:300])
+            Citation(
+                document_id=c.document_id,
+                filename=c.filename,
+                page_number=c.page_number,
+                excerpt=c.text[:300],
+            )
             for c in chunks
         ]
 

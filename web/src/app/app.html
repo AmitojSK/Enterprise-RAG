@@ -4,42 +4,59 @@
       <p class="eyebrow">ENTERPRISE KNOWLEDGE</p>
       <h1>Document Intelligence</h1>
     </div>
-    <span class="status"><span></span> API connected locally</span>
   </header>
 
-  <section class="workspace">
-    <aside class="sidebar">
-      <section class="card">
-        <h2>Index a document</h2>
-        <p class="hint">Shared demo library. Supported: PDF, DOCX, TXT, and Markdown. Do not upload confidential files.</p>
-        <label class="file-picker" for="file">Choose document<input id="file" type="file" accept=".pdf,.docx,.txt,.md" (change)="chooseFile($event)" /></label>
-        @if (selectedFile(); as file) { <p class="file-name">{{ file.name }}</p> }
-        <button class="primary" [disabled]="!selectedFile() || isUploading()" (click)="upload()">
-          {{ isUploading() ? 'Uploading and indexing…' : 'Upload and index' }}
-        </button>
-        <p class="upload-status">{{ uploadStatus() }}</p>
-      </section>
+  <section class="workspace" [class.viewer-mode]="viewerDocId()">
+    <aside class="sidebar" [class.collapsed]="panelCollapsed()">
+      <button
+        class="panel-toggle"
+        type="button"
+        (click)="togglePanel()"
+        [title]="panelCollapsed() ? 'Expand panel' : 'Collapse panel'"
+        [attr.aria-label]="panelCollapsed() ? 'Expand panel' : 'Collapse panel'">
+        {{ panelCollapsed() ? '»' : '«' }}
+      </button>
 
-      <section class="card safety">
-        <h2>How answers stay reliable</h2>
-        <p>Every response is grounded in retrieved document chunks and includes evidence you can inspect.</p>
-      </section>
+      @if (!panelCollapsed()) {
+        @if (viewerDocId()) {
+          <!-- Viewer mode: the source document opens here. -->
+          <section class="card viewer-card">
+            <div class="viewer-head">
+              <span class="viewer-title" [title]="viewerFilename()">{{ viewerFilename() }}</span>
+              <button class="viewer-back" type="button" (click)="closeViewer()" title="Back to library" aria-label="Back to library">✕</button>
+            </div>
+            <app-pdf-viewer [src]="viewerSrc()" [page]="viewerPage()" (pageChange)="viewerPage.set($event)"></app-pdf-viewer>
+          </section>
+        } @else {
+          <!-- Browse mode: index a document and see the library. -->
+          <section class="card">
+            <h2>Index a document</h2>
+            <p class="hint">Shared demo library. Supported: PDF, DOCX, TXT, and Markdown. Do not upload confidential files.</p>
+            <label class="file-picker" for="file">Choose document<input id="file" type="file" accept=".pdf,.docx,.txt,.md" (change)="chooseFile($event)" /></label>
+            @if (selectedFile(); as file) { <p class="file-name">{{ file.name }}</p> }
+            <button class="primary" [disabled]="!selectedFile() || isUploading()" (click)="upload()">
+              {{ isUploading() ? 'Uploading and indexing…' : 'Upload and index' }}
+            </button>
+            <p class="upload-status">{{ uploadStatus() }}</p>
+          </section>
 
-      @if (documents().length) {
-        <section class="card">
-          <h2>Indexed documents</h2>
-          <ul class="doc-list">
-            @for (doc of documents(); track doc.document_id) {
-              <li>
-                <div class="doc-info">
-                  <span class="doc-name">{{ doc.filename }}</span>
-                  <span class="doc-meta">{{ doc.chunk_count }} chunks · {{ doc.status }}</span>
-                </div>
-                <button class="doc-delete" title="Remove from library" (click)="deleteDocument(doc)">✕</button>
-              </li>
-            }
-          </ul>
-        </section>
+          @if (documents().length) {
+            <section class="card">
+              <h2>Indexed documents</h2>
+              <ul class="doc-list">
+                @for (doc of documents(); track doc.document_id) {
+                  <li>
+                    <button class="doc-info" type="button" (click)="openDocument(doc)" title="Open document">
+                      <span class="doc-name">{{ doc.filename }}</span>
+                      <span class="doc-meta">{{ doc.chunk_count }} chunks · {{ doc.status }}</span>
+                    </button>
+                    <button class="doc-delete" title="Delete from database" aria-label="Delete document" (click)="deleteDocument(doc)">🗑</button>
+                  </li>
+                }
+              </ul>
+            </section>
+          }
+        }
       }
     </aside>
 
@@ -59,7 +76,13 @@
             @if (message.citations?.length) {
               <section class="citations"><h3>Sources</h3>
                 @for (citation of message.citations; track citation.filename + citation.page_number + citation.excerpt) {
-                  <details><summary>{{ citation.filename }}@if (citation.page_number) { · p. {{ citation.page_number }} }</summary><p>{{ citation.excerpt }}</p></details>
+                  <div class="citation">
+                    <button class="cite-open" type="button" (click)="openCitation(citation)" title="Open this page in the document">
+                      <span class="cite-name">{{ citation.filename }}@if (citation.page_number) { · p. {{ citation.page_number }} }</span>
+                      <span class="cite-go">Open ›</span>
+                    </button>
+                    <details><summary>Excerpt</summary><p>{{ citation.excerpt }}</p></details>
+                  </div>
                 }
               </section>
             }

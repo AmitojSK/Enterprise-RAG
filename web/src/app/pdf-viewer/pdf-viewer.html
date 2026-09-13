@@ -1,0 +1,10 @@
+<div class="pdf-toolbar">
+  <button type="button" (click)="prev()" [disabled]="!totalPages() || pageNumber() <= 1" title="Previous page">‹</button>
+  <span class="pdf-pageinfo">{{ totalPages() ? pageNumber() : 0 }} / {{ totalPages() }}</span>
+  <button type="button" (click)="next()" [disabled]="!totalPages() || pageNumber() >= totalPages()" title="Next page">›</button>
+</div>
+<div class="pdf-canvas-wrap">
+  @if (loading()) { <p class="pdf-msg">Loading document…</p> }
+  @if (errorMsg()) { <p class="pdf-msg">{{ errorMsg() }}</p> }
+  <canvas #canvas [hidden]="!!errorMsg() || loading()"></canvas>
+</div>

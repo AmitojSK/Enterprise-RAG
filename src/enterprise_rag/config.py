@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     # An empty value is an explicit opt-out from background ingestion: the API
     # then parses and embeds uploads inside the request instead of enqueuing.
     redis_url: str = "redis://localhost:6379/0"
+    # Cloudflare R2 (S3-compatible) object storage for the original uploaded
+    # files, so the frontend can render the source PDF beside each answer. All
+    # four are required together; when any is blank, ingestion still indexes and
+    # answers documents -- it just stores no viewable original. Never commit real
+    # values: the key/secret belong in .env and render.env, both gitignored.
+    r2_endpoint: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = ""
     # Comma-separated browser origins allowed to call this API. A deployed
     # frontend is served from a different origin than the API, so its URL must
     # be listed here or the browser will block every request.

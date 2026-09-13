@@ -11,3 +11,5 @@ data/
 .ruff_cache/
 coverage.xml
 Interview.md
+# Session handoff notes for resuming work in a new chat; not part of the project.
+HANDOFF.md

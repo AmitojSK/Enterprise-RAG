@@ -3,11 +3,12 @@ import { FormsModule } from '@angular/forms';
 import { NgClass } from '@angular/common';
 import { finalize } from 'rxjs';
 import { RagApiService } from './api/rag-api.service';
-import { ChatMessage, DocumentListItem } from './models/rag.models';
+import { PdfViewer } from './pdf-viewer/pdf-viewer';
+import { ChatMessage, Citation, DocumentListItem } from './models/rag.models';
 
 @Component({
   selector: 'app-root',
-  imports: [FormsModule, NgClass],
+  imports: [FormsModule, NgClass, PdfViewer],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -22,6 +23,17 @@ export class App implements OnInit {
   protected documents = signal<DocumentListItem[]>([]);
   protected readonly canAsk = computed(() => this.question().trim().length >= 3 && !this.isAsking());
 
+  // Left-panel state. The panel collapses to a rail, and switches between
+  // browsing the library and viewing one document's source PDF.
+  protected panelCollapsed = signal(false);
+  protected viewerDocId = signal<string | null>(null);
+  protected viewerFilename = signal('');
+  protected viewerPage = signal(1);
+  protected readonly viewerSrc = computed(() => {
+    const id = this.viewerDocId();
+    return id ? this.ragApi.documentFileUrl(id) : '';
+  });
+
   constructor(private readonly ragApi: RagApiService) {}
 
   ngOnInit(): void {
@@ -34,11 +46,70 @@ export class App implements OnInit {
     });
   }
 
+  /** Permanently delete a document (metadata, vectors, and stored file). */
   protected deleteDocument(doc: DocumentListItem): void {
+    if (!confirm(`Delete "${doc.filename}" from the library? This removes it from the database and cannot be undone.`)) {
+      return;
+    }
     this.ragApi.deleteDocument(doc.document_id).subscribe({
-      next: () => this.documents.update((docs) => docs.filter((d) => d.document_id !== doc.document_id)),
+      next: () => {
+        this.documents.update((docs) => docs.filter((d) => d.document_id !== doc.document_id));
+        // If the deleted document is open in the viewer, return to the library.
+        if (this.viewerDocId() === doc.document_id) this.closeViewer();
+      },
       error: (err: unknown) => this.showApiError(err, 'Could not delete document.'),
     });
+  }
+
+  /** Toggle the left panel between its full width and a collapsed rail. */
+  protected togglePanel(): void {
+    this.panelCollapsed.update((collapsed) => !collapsed);
+  }
+
+  /** Open a document in the left-panel viewer at an optional page. */
+  protected openDocument(doc: DocumentListItem, page = 1): void {
+    this.panelCollapsed.set(false);
+    this.viewerFilename.set(doc.filename);
+    this.viewerPage.set(page);
+    this.viewerDocId.set(doc.document_id);
+  }
+
+  /** Open the document a citation points to, at its cited page. */
+  protected openCitation(citation: Citation): void {
+    const doc = this.documentForCitation(citation);
+    if (!doc) return;
+    this.openDocument(doc, citation.page_number ?? 1);
+  }
+
+  /** Return to the library list from the viewer. */
+  protected closeViewer(): void {
+    this.viewerDocId.set(null);
+    this.viewerFilename.set('');
+  }
+
+  /** Auto-open the source of the most relevant citation when an answer lands.
+   *
+   * Citations arrive ranked most-relevant first, so opening the first one that
+   * resolves to a document puts the strongest evidence in front of the user
+   * without a click. Later, clicking any citation switches the viewer to it.
+   */
+  private autoOpenTopCitation(citations: Citation[]): void {
+    for (const citation of citations) {
+      const doc = this.documentForCitation(citation);
+      if (doc) {
+        this.openDocument(doc, citation.page_number ?? 1);
+        return;
+      }
+    }
+  }
+
+  /** Resolve a citation to a known document, preferring its ID over filename. */
+  private documentForCitation(citation: Citation): DocumentListItem | undefined {
+    const docs = this.documents();
+    return (
+      docs.find((d) => d.document_id === citation.document_id) ??
+      docs.find((d) => d.filename === citation.filename)
+    );
   }
 
   /** Capture the selected file; uploading happens only after the user clicks Index. */
@@ -142,14 +213,16 @@ export class App implements OnInit {
           });
         }
         if (event.citations) {
+          const citations = event.citations;
           this.messages.update((msgs) => {
             const updated = [...msgs];
             const last = { ...updated[updated.length - 1] };
-            last.citations = event.citations;
+            last.citations = citations;
             last.requestId = event.request_id;
             updated[updated.length - 1] = last;
             return updated;
           });
+          this.autoOpenTopCitation(citations);
         }
       },
       () => this.isAsking.set(false),

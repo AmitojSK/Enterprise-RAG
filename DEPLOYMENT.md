@@ -17,6 +17,7 @@ Five pieces, three of them outside Render:
 | **Frontend** (Angular) | Render **Static Site** | Free | Zero instance-hours; never sleeps |
 | **Metadata DB** | **Postgres on your Hostinger VPS** | Already paid for | Never expires, unlike Render's free tier |
 | **Vector DB** | **Qdrant Cloud** | Free (1 GB) | Render has no vector database offering |
+| **File storage** | **Cloudflare R2** | Free (10 GB) | Holds the original uploaded files so the UI can render the source PDF |
 | **LLM + embeddings** | **OpenAI API** | Pay-as-you-go | The only piece that costs real money |
 
 Deliberately **not** deployed: the Celery worker and Redis broker. Render's
@@ -78,6 +79,65 @@ Keep both to hand; they become `QDRANT_URL` and `QDRANT_API_KEY`.
 > that as a `503` from the vector store rather than anything naming Qdrant. A
 > deleted one takes your indexed vectors with it. See
 > [§8](#8-known-limitations) for how to keep it alive.
+
+---
+
+## 3b. Create the Cloudflare R2 bucket
+
+The app keeps the **original bytes** of every uploaded file so the frontend can
+render the source PDF beside a cited answer and jump to a citation's page. Three
+stores, each holding what it is good at: Qdrant holds the vectors, Postgres holds
+the document metadata, and **R2 holds the files**.
+
+**Why object storage rather than a database column.** Large binaries do not
+belong in a relational database — they bloat backups and `pg_dump`, and every
+read pulls the whole blob into the API's memory. Render's own disk is no good
+either: the free tier has none, and the container filesystem is wiped on each
+deploy, so anything written locally vanishes. R2 is purpose-built for this, is
+S3-compatible, and — unlike most object storage — charges **nothing for egress**,
+which matters because the API streams every file back out on view.
+
+**R2 is free at this scale:** 10 GB storage, 10 million reads and 1 million
+writes per month, zero egress. Cloudflare may ask for a card to *enable* R2, but
+nothing here bills under the free tier.
+
+1. Sign up / sign in at <https://dash.cloudflare.com>, then **R2 Object Storage**
+   in the sidebar and enable it.
+2. **Create bucket:**
+   - **Name:** `enterprise-rag-docs` (permanent).
+   - **Location:** **Automatic**, and — because the API runs in Frankfurt —
+     open **Provide a location hint** and pick **Western Europe**. Files are
+     served browser → Render (Frankfurt) → R2, so a European bucket avoids a
+     cross-region hop. Location is fixed at creation.
+   - **Default Storage Class:** **Standard** (files are read on demand;
+     *Infrequent Access* adds per-retrieval fees).
+   - Leave the bucket **private** — the API proxies every file through its own
+     origin, so the bucket never needs public access or CORS rules of its own.
+3. **Create an API token:** R2 → **Manage R2 API Tokens** → **Create Account API
+   token** → permission **Object Read & Write**, scoped to **only**
+   `enterprise-rag-docs`. On the result screen copy three things (the **Secret**
+   is shown once):
+   - **Access Key ID**
+   - **Secret Access Key**
+   - the **endpoint** — the standard S3 form
+     `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (your account ID is also on
+     the R2 overview page). Ignore the separate "Token value" — that is for
+     Cloudflare's own API, not the S3 client this app uses. Use the `.eu.`
+     jurisdiction endpoint **only** if you created the bucket with
+     "Specify jurisdiction → EU".
+
+Keep the three values plus the bucket name to hand; they become the four `R2_*`
+variables in phase 4b.
+
+> **Storage is optional and degrades gracefully.** If the `R2_*` variables are
+> absent, ingestion still parses, embeds, and indexes every document — it just
+> stores no viewable original, and the viewer shows a "re-upload to view"
+> message. The app never fails an upload because storage is unavailable.
+
+> **The object key is derived from the document ID**, so adding R2 needs **no
+> database migration**. The consequence: any document indexed *before* R2 was
+> configured has no stored file, and must be deleted and re-uploaded once to
+> become viewable.
 
 ---
 
@@ -198,6 +258,10 @@ Then add the environment variables:
 | `QDRANT_URL` | The Qdrant endpoint from phase 3, including `:6333` |
 | `QDRANT_API_KEY` | The Qdrant API key from phase 3 |
 | `QDRANT_COLLECTION` | `enterprise_documents_prod` — see below |
+| `R2_ENDPOINT` | The R2 endpoint from phase 3b, `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `R2_ACCESS_KEY_ID` | The R2 access key ID from phase 3b |
+| `R2_SECRET_ACCESS_KEY` | The R2 secret access key from phase 3b |
+| `R2_BUCKET` | `enterprise-rag-docs` |
 | `REDIS_URL` | *(empty string — this is what disables background ingestion)* |
 | `MAX_UPLOAD_BYTES` | `20971520` |
 | `ALLOWED_ORIGINS` | `http://localhost:4200` — corrected in phase 6 |
@@ -320,8 +384,13 @@ Saving the variable redeploys the API automatically. Wait for it to go green.
    - *`503` mentioning the vector store* → `QDRANT_URL` or `QDRANT_API_KEY`.
    - *`422` about no readable text* → the PDF is scanned images; there is no OCR
      in this pipeline. Try a text PDF.
-4. Ask a question about the document. Expect a streamed answer with citations.
-5. Delete the document and confirm it disappears from the list.
+4. Ask a question about the document. Expect a streamed answer with citations,
+   and the source PDF to open in the left panel at the top citation's page.
+   - *The panel shows "Preview not available"* → the `R2_*` variables, or a
+     document indexed before R2 was configured (re-upload it once).
+5. Click a citation and confirm the viewer jumps to that page.
+6. Delete the document and confirm it disappears from the list (this also removes
+   its vectors from Qdrant and its file from R2).
 
 ---
 
@@ -438,6 +507,10 @@ Everything the API reads, with its default from `config.py`.
 | `QDRANT_COLLECTION` | `enterprise_documents_prod` — see below | Collection name |
 | `QDRANT_TIMEOUT_SECONDS` | `60` | Raise if cloud writes time out |
 | `INDEXING_BATCH_SIZE` | `32` | Vectors per upsert request |
+| `R2_ENDPOINT` | *(empty)* | Cloudflare R2 S3 endpoint; all four `R2_*` are required together for source-file viewing |
+| `R2_ACCESS_KEY_ID` | *(empty)* | R2 access key ID |
+| `R2_SECRET_ACCESS_KEY` | *(empty)* | R2 secret access key |
+| `R2_BUCKET` | *(empty)* | R2 bucket name; empty disables file storage (uploads still index) |
 | `REDIS_URL` | `redis://localhost:6379/0` | Celery broker; **empty disables background ingestion** |
 | `ALLOWED_ORIGINS` | `http://localhost:4200,http://127.0.0.1:4200` | Comma-separated CORS origins |
 | `MAX_UPLOAD_BYTES` | `20971520` | Upload size ceiling (20 MB); nginx allows 21 MB so the API enforces it |

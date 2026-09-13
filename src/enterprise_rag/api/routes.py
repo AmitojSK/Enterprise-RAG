@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from enterprise_rag.config import Settings, get_settings
@@ -25,6 +25,12 @@ from enterprise_rag.services.audit import log_ingestion, log_query
 from enterprise_rag.services.chunking import chunk_pages
 from enterprise_rag.services.document_loader import SUPPORTED_SUFFIXES, extract_pages
 from enterprise_rag.services.embeddings import OpenAIEmbeddingService
+from enterprise_rag.services.object_store import (
+    ObjectStore,
+    ObjectStoreUnavailable,
+    content_type_for,
+    storage_key,
+)
 from enterprise_rag.services.rag import RAGService
 from enterprise_rag.services.vector_store import QdrantStore, VectorStoreUnavailable
 
@@ -139,6 +145,13 @@ def ingest_document(
     record.chunk_count = len(chunks)
     record.indexed_at = datetime.now(timezone.utc)
     db.commit()
+    # Keep the original bytes so the frontend can render the source document.
+    # A storage failure must not fail an otherwise successful ingestion: the
+    # document is already indexed and answerable, only its preview is missing.
+    try:
+        ObjectStore(settings).put(storage_key(record.id, filename), content, content_type_for(filename))
+    except ObjectStoreUnavailable:
+        logger.warning("Indexed %s but could not store its original for viewing", record.id, exc_info=True)
     log_ingestion(UUID(record.id), filename, len(chunks))
     return IngestResponse(document_id=record.id, filename=filename, chunks_indexed=len(chunks))
 
@@ -197,18 +210,52 @@ def get_document(document_id: str, db: Session = Depends(get_db)) -> DocumentDet
     )
 
 
+@router.get("/documents/{document_id}/file")
+def get_document_file(
+    document_id: str,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Serve the original uploaded bytes so the frontend can render the source.
+
+    Proxying the bytes through the API (rather than handing out a presigned R2
+    URL) keeps the bucket private and avoids configuring CORS on it: the browser
+    only ever talks to this already-allowed origin. Files are small (<= 20 MB)
+    and read on demand, so loading one into memory per request is acceptable.
+    """
+
+    record = db.get(DocumentRecord, document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Document not found")
+    result = ObjectStore(settings).get(storage_key(document_id, record.filename))
+    if result is None:
+        # No stored original: storage is unconfigured, or the document was
+        # indexed before file storage existed. Either way there is nothing to
+        # preview, which the frontend surfaces as a re-upload prompt.
+        raise HTTPException(status_code=404, detail="No stored file for this document")
+    data, content_type = result
+    return Response(
+        content=data,
+        media_type=content_type,
+        # `inline` lets the browser/pdf.js render it in place rather than
+        # forcing a download; the filename is used if the user saves it.
+        headers={"Content-Disposition": f'inline; filename="{record.filename}"'},
+    )
+
+
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(
     document_id: str,
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> None:
-    """Remove a document's metadata and vectors from the shared library."""
+    """Remove a document's metadata, vectors, and stored original file."""
 
     record = db.get(DocumentRecord, document_id)
     if not record:
         raise HTTPException(status_code=404, detail="Document not found")
     QdrantStore(settings).delete_by_document(document_id)
+    ObjectStore(settings).delete(storage_key(document_id, record.filename))
     db.delete(record)
     db.commit()
 

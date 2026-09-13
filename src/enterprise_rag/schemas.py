@@ -11,8 +11,13 @@ class QueryRequest(BaseModel):
 
 
 class Citation(BaseModel):
-    """Human-readable evidence returned with each answer."""
+    """Human-readable evidence returned with each answer.
 
+    ``document_id`` lets the frontend open the exact source file at the cited
+    page without guessing from the (non-unique) filename.
+    """
+
+    document_id: str | None = None
     filename: str
     page_number: int | None = None
     excerpt: str

@@ -5,6 +5,8 @@
  */
 
 export interface Citation {
+  /** ID of the source document, used to open its file at the cited page. */
+  document_id: string | null;
   filename: string;
   page_number: number | null;
   excerpt: string;
