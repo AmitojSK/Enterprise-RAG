@@ -1,7 +1,23 @@
 """Adapter for an embedding provider, isolated so it is easy to replace later."""
 
+from functools import lru_cache
 from openai import OpenAI
 from enterprise_rag.config import Settings
+
+
+@lru_cache(maxsize=4)
+def get_openai_client(api_key: str) -> OpenAI:
+    """Return one client per API key, shared for the life of the process.
+
+    These services are constructed per request, and building a client each time
+    means a fresh connection pool -- so every call paid for DNS, a TCP connect
+    and a TLS handshake before sending anything. The underlying ``httpx`` client
+    is thread-safe, which matters because the routes run in FastAPI's threadpool.
+    Keyed on the API key rather than ``Settings`` because pydantic models are not
+    hashable.
+    """
+
+    return OpenAI(api_key=api_key)
 
 
 class OpenAIEmbeddingService:
@@ -10,7 +26,7 @@ class OpenAIEmbeddingService:
     def __init__(self, settings: Settings) -> None:
         if not settings.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is required for indexing and querying")
-        self.client = OpenAI(api_key=settings.openai_api_key)
+        self.client = get_openai_client(settings.openai_api_key)
         self.model = settings.embedding_model
 
     def embed(self, texts: list[str]) -> list[list[float]]:

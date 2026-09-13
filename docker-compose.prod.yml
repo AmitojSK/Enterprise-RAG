@@ -1,4 +1,11 @@
-# Production stack for the Hostinger VPS.
+# Self-hosting stack: the whole application on a single server.
+#
+# NOT the current deployment, and nothing here is running anywhere today.
+# The live demo runs the API and frontend on Render and uses the VPS for
+# Postgres only (see deploy/vps-postgres.yml and DEPLOYMENT.md). This file is
+# the alternative described in docs/self-hosting.md: no cold start and the
+# Celery worker restored, at the cost of operating everything yourself. It
+# would replace the Render half rather than add to it.
 #
 # Differs from docker-compose.yml in four ways that matter:
 #   1. Only Caddy publishes ports. Postgres, Qdrant, and Redis are reachable

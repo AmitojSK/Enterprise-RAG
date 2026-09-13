@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from openai import OpenAI
 from enterprise_rag.config import Settings
 from enterprise_rag.schemas import Citation
-from enterprise_rag.services.embeddings import OpenAIEmbeddingService
+from enterprise_rag.services.embeddings import OpenAIEmbeddingService, get_openai_client
 from enterprise_rag.services.vector_store import QdrantStore, RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ class RAGService:
         self.settings = settings
         self.embeddings = OpenAIEmbeddingService(settings)
         self.store = QdrantStore(settings)
-        self.llm = OpenAI(api_key=settings.openai_api_key)
+        self.llm = get_openai_client(settings.openai_api_key)
 
     @staticmethod
     def _system_prompt() -> str:

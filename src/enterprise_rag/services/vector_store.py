@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from functools import lru_cache
 import time
 from uuid import UUID, uuid5
 from qdrant_client import QdrantClient, models
@@ -27,16 +28,43 @@ class VectorStoreUnavailable(RuntimeError):
 
 logger = logging.getLogger(__name__)
 
+# Collections and their payload indexes only need creating once per process, but
+# ``QdrantStore`` is constructed per request, so this has to live at module scope
+# rather than on the instance. Without it every single search spent three extra
+# round trips on the vector store -- an existence check, a payload-index create
+# with ``wait=True``, and a stats read -- before running the actual query.
+#
+# The trade-off: if a collection is deleted out from under a running process, it
+# will not be recreated automatically, because this cache still says it exists.
+# Nothing in this application deletes collections, so that only happens through
+# operator action, and a restart clears it.
+_ensured_collections: set[tuple[str, str, int]] = set()
+
+
+@lru_cache(maxsize=4)
+def get_qdrant_client(url: str, api_key: str | None, timeout: int) -> QdrantClient:
+    """Return one client per cluster, shared for the life of the process.
+
+    ``QdrantStore`` is built per request; building a client with it meant a new
+    connection pool and a fresh TLS handshake on every query. Keyed on the
+    connection parameters rather than ``Settings``, which is not hashable.
+    """
+
+    return QdrantClient(url=url, api_key=api_key, timeout=timeout)
+
 
 class QdrantStore:
     """Persistence boundary for document vectors and their metadata."""
 
     def __init__(self, settings: Settings) -> None:
         self.collection = settings.qdrant_collection
-        self.client = QdrantClient(
-            url=settings.qdrant_url,
-            api_key=settings.qdrant_api_key,
-            timeout=settings.qdrant_timeout_seconds,
+        # Part of the cache key: the same collection name on a different cluster
+        # is a different collection.
+        self.url = settings.qdrant_url
+        self.client = get_qdrant_client(
+            settings.qdrant_url,
+            settings.qdrant_api_key,
+            settings.qdrant_timeout_seconds,
         )
         self.batch_size = settings.indexing_batch_size
 
@@ -49,6 +77,10 @@ class QdrantStore:
         also repairs collections created before this index requirement existed.
         """
 
+        cache_key = (self.url, self.collection, vector_size)
+        if cache_key in _ensured_collections:
+            return
+
         if not self.client.collection_exists(self.collection):
             self.client.create_collection(
                 collection_name=self.collection,
@@ -60,6 +92,15 @@ class QdrantStore:
             field_schema=models.PayloadSchemaType.KEYWORD,
             wait=True,
         )
+        # Logged here rather than per query: it costs a round trip, and once per
+        # process is enough to tell whether the collection holds anything.
+        info = self.client.get_collection(self.collection)
+        logger.info(
+            "Collection '%s' ready with %s points (%s in an index)",
+            self.collection, info.points_count, info.indexed_vectors_count,
+        )
+        # Two threads racing here both do idempotent work, so no lock is needed.
+        _ensured_collections.add(cache_key)
 
     def upsert(
         self,
@@ -119,11 +160,10 @@ class QdrantStore:
     ) -> list[RetrievedChunk]:
         """Search the shared library; optional document IDs narrow the result set."""
 
-        # This also ensures the payload indexes exist for collections created
-        # before the first query, including collections already in Qdrant Cloud.
+        # Ensures the payload index exists for collections created before the
+        # first query, including ones already in Qdrant Cloud. Memoized per
+        # process, so this is free after the first call.
         self.ensure_collection(len(vector))
-        info = self.client.get_collection(self.collection)
-        logger.info("Collection '%s' has %s indexed points", self.collection, info.points_count)
         conditions: list[models.FieldCondition] = []
         if document_ids:
             conditions.append(models.FieldCondition(key="document_id", match=models.MatchAny(any=document_ids)))
