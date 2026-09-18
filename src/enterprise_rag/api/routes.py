@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from enterprise_rag.config import Settings, get_settings
 from enterprise_rag.database import get_db
 from enterprise_rag.models import DocumentRecord
+from enterprise_rag.observability import get_token_usage, request_id_var
 from enterprise_rag.schemas import (
     DocumentDetail,
     DocumentListItem,
@@ -164,10 +165,13 @@ def query_knowledge(
     """Answer a question with grounded retrieval and inspectable citations."""
 
     reject_prompt_injection(request.question)
-    request_id = uuid4()
+    # The correlation ID is set by CorrelationIdMiddleware and already threads
+    # through the service-layer logs; reuse it so the client, the audit line, and
+    # those logs all share one ID.
+    request_id = request_id_var.get()
     answer, citations = RAGService(settings).answer(request.question, request.document_ids)
-    log_query(request_id, len(citations))
-    return QueryResponse(answer=answer, citations=citations, request_id=str(request_id))
+    log_query(request_id, len(citations), get_token_usage())
+    return QueryResponse(answer=answer, citations=citations, request_id=request_id)
 
 
 def _format_timestamp(dt: datetime | None) -> str | None:
@@ -268,15 +272,19 @@ def query_stream(
     """Stream the answer token-by-token via SSE, with citations as a final event."""
 
     reject_prompt_injection(request.question)
-    request_id = uuid4()
+    request_id = request_id_var.get()
     token_iter, citations = RAGService(settings).stream_answer(request.question, request.document_ids)
-    log_query(request_id, len(citations))
 
     def event_stream():
-        for token in token_iter:
-            yield f"data: {json.dumps({'token': token})}\n\n"
-        yield f"data: {json.dumps({'citations': [c.model_dump() for c in citations], 'request_id': str(request_id)})}\n\n"
-        yield "data: [DONE]\n\n"
+        try:
+            for token in token_iter:
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            yield f"data: {json.dumps({'citations': [c.model_dump() for c in citations], 'request_id': request_id})}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            # Logged after the stream, so generation token usage is included, and
+            # in `finally` so a client disconnect still records what was produced.
+            log_query(request_id, len(citations), get_token_usage())
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

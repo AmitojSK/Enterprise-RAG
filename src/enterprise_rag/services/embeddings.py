@@ -3,6 +3,7 @@
 from functools import lru_cache
 from openai import OpenAI
 from enterprise_rag.config import Settings
+from enterprise_rag.observability import record_token_usage
 
 
 @lru_cache(maxsize=4)
@@ -33,4 +34,5 @@ class OpenAIEmbeddingService:
         """Embed a batch in one API call to reduce latency and cost."""
 
         response = self.client.embeddings.create(model=self.model, input=texts)
+        record_token_usage(response.usage, embedding=True)
         return [item.embedding for item in response.data]

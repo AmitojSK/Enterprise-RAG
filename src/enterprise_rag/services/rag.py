@@ -6,6 +6,7 @@ from collections.abc import Iterator
 
 from openai import OpenAI
 from enterprise_rag.config import Settings
+from enterprise_rag.observability import record_token_usage
 from enterprise_rag.schemas import Citation
 from enterprise_rag.services.embeddings import OpenAIEmbeddingService, get_openai_client
 from enterprise_rag.services.vector_store import QdrantStore, RetrievedChunk
@@ -50,6 +51,7 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
                 {"role": "user", "content": f"Question: {question}\n\nPassages:\n{numbered}"},
             ],
         )
+        record_token_usage(response.usage)
         try:
             ranking = json.loads(response.choices[0].message.content or "[]")
             valid = [chunks[i] for i in ranking if isinstance(i, int) and 0 <= i < len(chunks)]
@@ -109,6 +111,7 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
                 {"role": "user", "content": f"Question: {question}\n\nDocument excerpts:\n{self._build_context(selected)}"},
             ],
         )
+        record_token_usage(completion.usage)
         answer = completion.choices[0].message.content or "No answer was generated."
         return answer, self._build_citations(selected)
 
@@ -133,6 +136,10 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
             model=self.settings.chat_model,
             temperature=0,
             stream=True,
+            # Ask for a final usage chunk; a streamed completion omits token
+            # counts otherwise, which would silently drop the biggest call from
+            # the per-request cost total.
+            stream_options={"include_usage": True},
             messages=[
                 {"role": "system", "content": self._system_prompt()},
                 {"role": "user", "content": f"Question: {question}\n\nDocument excerpts:\n{self._build_context(selected)}"},
@@ -140,9 +147,15 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
         )
 
         def token_iterator() -> Iterator[str]:
-            """Yield non-empty text deltas from the language-model stream."""
+            """Yield non-empty text deltas, recording usage from the final chunk."""
 
             for event in stream:
+                # The include_usage chunk arrives last with usage set and an
+                # empty ``choices`` list, so record it and skip the delta read.
+                if event.usage is not None:
+                    record_token_usage(event.usage)
+                if not event.choices:
+                    continue
                 delta = event.choices[0].delta.content
                 if delta:
                     yield delta
