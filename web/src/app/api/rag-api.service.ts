@@ -48,10 +48,8 @@ export class RagApiService {
   /** Stream tokens via SSE from the query/stream endpoint. */
   streamQuestion(question: string, onToken: (event: StreamTokenEvent) => void, onDone: () => void, onError: (err: string) => void): EventSource {
     const url = `${apiBaseUrl}/v1/query/stream`;
-    const eventSource = new EventSource(url, { withCredentials: false });
-    // SSE GET won't work with a POST body; use fetch + ReadableStream instead.
-    eventSource.close();
-
+    // The browser's EventSource only does GET with no body, but this endpoint is
+    // a POST with a JSON body, so we stream the response via fetch + ReadableStream.
     const controller = new AbortController();
     fetch(url, {
       method: 'POST',
