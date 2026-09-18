@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from enterprise_rag.config import Settings, get_settings
 from enterprise_rag.database import get_db
+from enterprise_rag import metrics
 from enterprise_rag.models import DocumentRecord
 from enterprise_rag.observability import get_token_usage, request_id_var
 from enterprise_rag.schemas import (
@@ -170,7 +171,9 @@ def query_knowledge(
     # those logs all share one ID.
     request_id = request_id_var.get()
     answer, citations = RAGService(settings).answer(request.question, request.document_ids)
-    log_query(request_id, len(citations), get_token_usage())
+    tokens = get_token_usage()
+    log_query(request_id, len(citations), tokens)
+    metrics.observe_query(len(citations), tokens)
     return QueryResponse(answer=answer, citations=citations, request_id=request_id)
 
 
@@ -282,9 +285,11 @@ def query_stream(
             yield f"data: {json.dumps({'citations': [c.model_dump() for c in citations], 'request_id': request_id})}\n\n"
             yield "data: [DONE]\n\n"
         finally:
-            # Logged after the stream, so generation token usage is included, and
+            # Recorded after the stream, so generation token usage is included, and
             # in `finally` so a client disconnect still records what was produced.
-            log_query(request_id, len(citations), get_token_usage())
+            tokens = get_token_usage()
+            log_query(request_id, len(citations), tokens)
+            metrics.observe_query(len(citations), tokens)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

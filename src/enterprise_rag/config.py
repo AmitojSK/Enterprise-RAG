@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     rerank_k: int = 8
     score_threshold: float = 0.25
     log_level: str = "INFO"
+    # "text" (default, human-readable for local dev) or "json" (one JSON object
+    # per line, for log aggregators). Set LOG_FORMAT=json in production.
+    log_format: str = "text"
     embedding_model: str = "text-embedding-3-small"
     chat_model: str = "gpt-4o-mini"
     # SQLite keeps the project runnable locally. Render will provide a

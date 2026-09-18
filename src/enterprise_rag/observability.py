@@ -12,8 +12,10 @@ spends hundreds of milliseconds to seconds in OpenAI and Qdrant round trips. The
 token counts are read off responses the code already holds -- no extra calls.
 """
 
+import json
 import logging
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -72,3 +74,34 @@ class RequestIdLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_var.get()
         return True
+
+
+# The attributes every LogRecord carries. Anything *else* on a record is a
+# caller-supplied ``extra=`` field, which the JSON formatter promotes to a
+# top-level key. Computed once from a throwaway record so it tracks the stdlib.
+_STANDARD_RECORD_ATTRS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime", "taskName", "request_id"}
+
+
+class JsonLogFormatter(logging.Formatter):
+    """Render each log record as one line of JSON, for log aggregators.
+
+    Structured fields passed via ``logger.info(..., extra={...})`` -- the audit
+    events do this -- become top-level keys, so an aggregator can filter on
+    ``event``, ``citations`` or ``prompt_tokens`` without a regex per message.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "request_id": getattr(record, "request_id", "-"),
+            "message": record.getMessage(),
+        }
+        for key, value in record.__dict__.items():
+            if key not in _STANDARD_RECORD_ATTRS and not key.startswith("_"):
+                payload[key] = value
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        # default=str so a stray non-serialisable value degrades instead of raising.
+        return json.dumps(payload, default=str)

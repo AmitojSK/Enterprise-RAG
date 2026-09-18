@@ -1,14 +1,17 @@
 """FastAPI application factory and operational endpoints."""
 
 import logging
-from fastapi import FastAPI
+import time
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from enterprise_rag import metrics
 from enterprise_rag.api.routes import router
 from enterprise_rag.config import get_settings
 from enterprise_rag.database import initialize_database
 from enterprise_rag.observability import (
+    JsonLogFormatter,
     RequestIdLogFilter,
     begin_token_accounting,
     new_request_id,
@@ -16,14 +19,17 @@ from enterprise_rag.observability import (
 )
 
 settings = get_settings()
-# `[%(request_id)s]` is populated by RequestIdLogFilter for every record, so the
-# service-layer logs carry the same correlation ID the client and audit line see.
-logging.basicConfig(
-    level=settings.log_level,
-    format="%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s",
-)
-for _handler in logging.getLogger().handlers:
-    _handler.addFilter(RequestIdLogFilter())
+# One root handler carrying the correlation ID (via RequestIdLogFilter) and one of
+# two formats: human-readable text for local dev, or one-JSON-object-per-line for
+# aggregators when LOG_FORMAT=json. The filter runs before formatting, so
+# `[%(request_id)s]` / the JSON `request_id` field is always populated.
+_log_handler = logging.StreamHandler()
+if settings.log_format.lower() == "json":
+    _log_handler.setFormatter(JsonLogFormatter())
+else:
+    _log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"))
+_log_handler.addFilter(RequestIdLogFilter())
+logging.basicConfig(level=settings.log_level, handlers=[_log_handler])
 
 
 class CorrelationIdMiddleware:
@@ -58,6 +64,41 @@ class CorrelationIdMiddleware:
         finally:
             request_id_var.reset(token)
 
+
+class PrometheusMiddleware:
+    """Time every HTTP request and record it for the /metrics endpoint.
+
+    Pure-ASGI so it can read the matched route template from the scope after
+    routing. Recording is in-memory, so it adds no request latency. The /metrics
+    scrape is skipped so it doesn't count itself.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") == "/metrics":
+            await self.app(scope, receive, send)
+            return
+        start = time.perf_counter()
+        status = {"code": 500}
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                status["code"] = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            # The route template (e.g. /v1/documents/{document_id}) keeps label
+            # cardinality bounded; unmatched paths (bots, 404s) collapse to one.
+            route = scope.get("route")
+            path = getattr(route, "path", None) or "unmatched"
+            metrics.observe_http(
+                scope.get("method", "UNKNOWN"), path, status["code"], time.perf_counter() - start
+            )
+
 app = FastAPI(title="Enterprise RAG API", version="0.2.0", description="Public, cited document intelligence API.")
 # Keep the allowed origins explicit rather than allowing arbitrary websites to
 # call the API. ALLOWED_ORIGINS defaults to Angular's local development server
@@ -73,8 +114,10 @@ app.add_middleware(
     # a different origin from the static frontend.
     expose_headers=["X-Request-ID"],
 )
+app.add_middleware(PrometheusMiddleware)
 # Added last so it is the outermost middleware: the correlation ID is set before
-# anything else (CORS, routing) runs, and stays set for the whole response.
+# anything else (CORS, routing, metrics timing) runs, and stays set for the whole
+# response.
 app.add_middleware(CorrelationIdMiddleware)
 app.include_router(router)
 
@@ -91,3 +134,16 @@ def health_check() -> dict[str, str]:
     """Liveness probe: proves that the API process is accepting traffic."""
 
     return {"status": "ok"}
+
+
+@app.get("/metrics", tags=["Operations"])
+def prometheus_metrics() -> Response:
+    """Expose Prometheus metrics for scraping.
+
+    Unauthenticated, like the rest of this demo API. In a real deployment this
+    would be bound to an internal network or protected, since it exposes request
+    counts and token totals.
+    """
+
+    payload, content_type = metrics.render()
+    return Response(content=payload, media_type=content_type)

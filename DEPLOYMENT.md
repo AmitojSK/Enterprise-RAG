@@ -267,6 +267,7 @@ Then add the environment variables:
 | `ALLOWED_ORIGINS` | `http://localhost:4200` — corrected in phase 6 |
 | `CHAT_MODEL` | `gpt-4o-mini` |
 | `LOG_LEVEL` | `INFO` |
+| `LOG_FORMAT` | `json` — one JSON object per line for log aggregation (defaults to `text`) |
 
 **Give production its own collection.** Qdrant holds the vectors, Postgres
 holds the document records, and the two must describe the same set. Pointing a
@@ -519,4 +520,5 @@ Everything the API reads, with its default from `config.py`.
 | `CHAT_MODEL` | `gpt-4o-mini` | Answer generation model |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
 | `LOG_LEVEL` | `INFO` | Root log level |
+| `LOG_FORMAT` | `text` | `text` for human-readable logs, `json` for one JSON object per line (aggregators) |
 | `PORT` | `8000` | Set by Render; the container binds it automatically |
