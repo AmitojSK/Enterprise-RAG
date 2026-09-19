@@ -1,0 +1,20 @@
+# Golden set for the fixture corpus (evals/corpus/cloud-cost-guide.pdf).
+# One JSON object per line. Fields:
+#   question    - the query to run through the pipeline
+#   doc         - source filename (for answerable items)
+#   pages       - expected evidence page number(s); ground truth we authored
+#   must_include- key facts a faithful answer should mention (lexical sanity check)
+#   answerable  - false => out of corpus; the system should abstain, not answer
+# Lines beginning with # are ignored.
+{"id": "q01", "question": "What is rightsizing and how does it save money?", "doc": "cloud-cost-guide.pdf", "pages": [1], "must_include": ["over-provisioning"], "answerable": true}
+{"id": "q02", "question": "Which option needs a one or three year commitment for a discount on steady workloads?", "doc": "cloud-cost-guide.pdf", "pages": [2], "must_include": ["discount"], "answerable": true}
+{"id": "q03", "question": "What are spot instances and when should I use them?", "doc": "cloud-cost-guide.pdf", "pages": [3], "must_include": ["fault-tolerant"], "answerable": true}
+{"id": "q04", "question": "How can I cut cloud costs for interruptible batch jobs?", "doc": "cloud-cost-guide.pdf", "pages": [3], "must_include": ["spot"], "answerable": true}
+{"id": "q05", "question": "How does storage tiering reduce cost?", "doc": "cloud-cost-guide.pdf", "pages": [4], "must_include": ["cold"], "answerable": true}
+{"id": "q06", "question": "Why is a resource tagging policy important for cost?", "doc": "cloud-cost-guide.pdf", "pages": [5], "must_include": ["accountability"], "answerable": true}
+{"id": "q07", "question": "How does autoscaling help control spend?", "doc": "cloud-cost-guide.pdf", "pages": [6], "must_include": ["demand"], "answerable": true}
+{"id": "q08", "question": "What are savings plans?", "doc": "cloud-cost-guide.pdf", "pages": [7], "must_include": ["commitment"], "answerable": true}
+{"id": "q09", "question": "How do budgets and alerts help catch runaway spend early?", "doc": "cloud-cost-guide.pdf", "pages": [8], "must_include": ["threshold"], "answerable": true}
+{"id": "q10", "question": "What discount can spot instances offer and what is the risk?", "doc": "cloud-cost-guide.pdf", "pages": [3], "must_include": ["ninety percent"], "answerable": true}
+{"id": "n01", "question": "What is the company's parental leave policy?", "answerable": false}
+{"id": "n02", "question": "What were the third quarter sales figures for the sales team?", "answerable": false}
