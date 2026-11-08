@@ -34,6 +34,12 @@ export class App implements OnInit {
     return id ? this.ragApi.documentFileUrl(id) : '';
   });
 
+  // Retrieval scope for the next question. 'all' searches the whole collection;
+  // 'document' hard-filters to the document currently open in the viewer. The
+  // 'document' option is only meaningful while a document is open, so closing or
+  // deleting the open document falls the scope back to 'all'.
+  protected askScope = signal<'all' | 'document'>('all');
+
   constructor(private readonly ragApi: RagApiService) {}
 
   ngOnInit(): void {
@@ -66,12 +72,27 @@ export class App implements OnInit {
     this.panelCollapsed.update((collapsed) => !collapsed);
   }
 
-  /** Open a document in the left-panel viewer at an optional page. */
-  protected openDocument(doc: DocumentListItem, page = 1): void {
+  /** Open a document in the left-panel viewer at an optional page.
+   *
+   * `scopeToDocument` is set only when the user explicitly opens a document to
+   * read it (clicking a library item): reading one document is a strong signal
+   * they want to ask about it, so the question scope follows. Citation-driven
+   * opens leave the scope untouched, so a whole-library answer that auto-opens
+   * its top source does not silently narrow the next question.
+   */
+  protected openDocument(doc: DocumentListItem, page = 1, scopeToDocument = false): void {
     this.panelCollapsed.set(false);
     this.viewerFilename.set(doc.filename);
     this.viewerPage.set(page);
     this.viewerDocId.set(doc.document_id);
+    if (scopeToDocument) this.askScope.set('document');
+  }
+
+  /** Choose the retrieval scope for the next question. 'document' is a no-op
+   *  unless a document is open to scope to. */
+  protected setScope(scope: 'all' | 'document'): void {
+    if (scope === 'document' && !this.viewerDocId()) return;
+    this.askScope.set(scope);
   }
 
   /** Open the document a citation points to, at its cited page. */
@@ -85,6 +106,8 @@ export class App implements OnInit {
   protected closeViewer(): void {
     this.viewerDocId.set(null);
     this.viewerFilename.set('');
+    // No open document to scope to any more.
+    this.askScope.set('all');
   }
 
   /** Auto-open the source of the most relevant citation when an answer lands.
@@ -200,6 +223,11 @@ export class App implements OnInit {
     // Add a placeholder assistant message that fills in as tokens arrive.
     this.messages.update((msgs) => [...msgs, { role: 'assistant', content: '' }]);
 
+    // Scope retrieval to the open document only when the user selected it and a
+    // document is actually open; otherwise search the whole library.
+    const openId = this.viewerDocId();
+    const documentIds = this.askScope() === 'document' && openId ? [openId] : undefined;
+
     this.ragApi.streamQuestion(
       question,
       (event) => {
@@ -227,6 +255,7 @@ export class App implements OnInit {
       },
       () => this.isAsking.set(false),
       (err) => { this.error.set(err); this.isAsking.set(false); },
+      documentIds,
     );
   }
 

@@ -46,22 +46,48 @@ class CorrelationIdMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # ASGI middleware receives three things for every request lifecycle event:
+        # - scope: metadata about the request (method, path, headers, etc.)
+        # - receive: a callable used to read inbound request messages/body chunks
+        # - send: a callable used to emit outbound response messages back to the
+        #   server
+        # Only HTTP requests get correlation tracking; WebSocket or lifespan events
+        # are passed straight through without any request-specific state.
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+
+        # Use an incoming X-Request-ID if the caller already supplied one; otherwise
+        # create a fresh correlation ID so every log line in this request can be
+        # tied back to the same trace.
         incoming = next((v.decode() for k, v in scope["headers"] if k == b"x-request-id"), None)
         request_id = incoming or new_request_id()
+
+        # Store the current request ID in a ContextVar so code deeper in the stack
+        # can access it without threading the value through function parameters.
         token = request_id_var.set(request_id)
+
+        # Initialize a fresh token counter for this request before any OpenAI calls
+        # happen. This keeps usage accounting scoped to a single HTTP request.
         begin_token_accounting()
 
+        # Wrap send() so the middleware can mutate the HTTP response before it is
+        # flushed to the client. This adds the X-Request-ID response header while
+        # preserving the original message flow.
         async def send_with_header(message: Message) -> None:
             if message["type"] == "http.response.start":
                 MutableHeaders(scope=message)["X-Request-ID"] = request_id
             await send(message)
 
         try:
+            # Invoke the next ASGI layer (routing + endpoint logic + downstream
+            # service calls). Because request_id_var is set before this call, every
+            # nested logger call in the same async task sees the same request ID.
             await self.app(scope, receive, send_with_header)
         finally:
+            # Clear the request-scoped state after the response is complete so later
+            # requests cannot accidentally reuse the same correlation ID or token
+            # accumulator.
             request_id_var.reset(token)
 
 

@@ -46,7 +46,7 @@
               <ul class="doc-list">
                 @for (doc of documents(); track doc.document_id) {
                   <li>
-                    <button class="doc-info" type="button" (click)="openDocument(doc)" title="Open document">
+                    <button class="doc-info" type="button" (click)="openDocument(doc, 1, true)" title="Open document">
                       <span class="doc-name">{{ doc.filename }}</span>
                       <span class="doc-meta">{{ doc.chunk_count }} chunks · {{ doc.status }}</span>
                     </button>
@@ -90,6 +90,31 @@
           </article>
         }
         @if (isAsking()) { <p class="thinking">Searching indexed documents and preparing a cited answer…</p> }
+      </div>
+      <div class="scope-bar">
+        <span class="scope-label">Search</span>
+        <div class="scope-toggle" role="group" aria-label="Retrieval scope">
+          <button
+            type="button"
+            class="scope-opt"
+            [class.active]="askScope() === 'all'"
+            (click)="setScope('all')"
+            title="Search the entire shared library">
+            All documents
+          </button>
+          <button
+            type="button"
+            class="scope-opt"
+            [class.active]="askScope() === 'document'"
+            [disabled]="!viewerDocId()"
+            (click)="setScope('document')"
+            [title]="viewerDocId() ? ('Search only ' + viewerFilename()) : 'Open a document to limit the search to it'">
+            This document
+          </button>
+        </div>
+        @if (askScope() === 'document' && viewerFilename()) {
+          <span class="scope-hint" [title]="viewerFilename()">Limited to {{ viewerFilename() }}</span>
+        }
       </div>
       <div class="composer">
         <label for="question" class="sr-only">Question</label>

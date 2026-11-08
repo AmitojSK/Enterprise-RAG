@@ -37,16 +37,29 @@ export class RagApiService {
     return `${apiBaseUrl}/v1/documents/${documentId}/file`;
   }
 
-  /** Send a question to the RAG service and receive its cited response. */
-  askQuestion(question: string): Observable<QueryResponse> {
+  /** Send a question to the RAG service and receive its cited response.
+   *
+   * Pass `documentIds` to restrict retrieval to specific documents; omit it (or
+   * pass an empty array) to search the whole shared library.
+   */
+  askQuestion(question: string, documentIds?: string[]): Observable<QueryResponse> {
     return this.http.post<QueryResponse>(
       `${apiBaseUrl}/v1/query`,
-      { question },
+      this.queryBody(question, documentIds),
     );
   }
 
-  /** Stream tokens via SSE from the query/stream endpoint. */
-  streamQuestion(question: string, onToken: (event: StreamTokenEvent) => void, onDone: () => void, onError: (err: string) => void): EventSource {
+  /** Build the query request body, including `document_ids` only when scoping. */
+  private queryBody(question: string, documentIds?: string[]): { question: string; document_ids?: string[] } {
+    return documentIds?.length ? { question, document_ids: documentIds } : { question };
+  }
+
+  /** Stream tokens via SSE from the query/stream endpoint.
+   *
+   * `documentIds` scopes retrieval to those documents when provided; when omitted
+   * the search runs across the entire collection.
+   */
+  streamQuestion(question: string, onToken: (event: StreamTokenEvent) => void, onDone: () => void, onError: (err: string) => void, documentIds?: string[]): EventSource {
     const url = `${apiBaseUrl}/v1/query/stream`;
     // The browser's EventSource only does GET with no body, but this endpoint is
     // a POST with a JSON body, so we stream the response via fetch + ReadableStream.
@@ -54,7 +67,7 @@ export class RagApiService {
     fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(this.queryBody(question, documentIds)),
       signal: controller.signal,
     }).then(async (response) => {
       if (!response.ok || !response.body) {
