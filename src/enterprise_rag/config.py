@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Anchored to this file rather than the process working directory. A bare
@@ -32,6 +33,15 @@ class Settings(BaseSettings):
     log_format: str = "text"
     embedding_model: str = "text-embedding-3-small"
     chat_model: str = "gpt-4o-mini"
+    # Reranker backend. "llm" (default) uses the chat model as an LLM-as-judge.
+    # "cohere" calls Cohere's hosted cross-encoder (POST /v2/rerank) -- better
+    # quality/latency, billed per search unit (not tokens), and needs
+    # COHERE_API_KEY. If "cohere" is selected but no key is set, the reranker
+    # safely falls back to the LLM judge. Any other value also means "llm".
+    reranker: str = "llm"
+    cohere_api_key: str = ""
+    rerank_model: str = "rerank-v3.5"
+    rerank_timeout_seconds: int = 15
     # SQLite keeps the project runnable locally. Render will provide a
     # postgresql+psycopg:// URL through its secret environment variables.
     database_url: str = "sqlite:///./data/enterprise_rag.db"

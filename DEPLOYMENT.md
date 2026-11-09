@@ -269,6 +269,17 @@ Then add the environment variables:
 | `LOG_LEVEL` | `INFO` |
 | `LOG_FORMAT` | `json` — one JSON object per line for log aggregation (defaults to `text`) |
 
+Optional — to use Cohere's cross-encoder reranker instead of the default LLM
+judge; omit all three to keep the default. The reranker call then goes to Cohere
+(not OpenAI); it falls back to the LLM judge if the key is missing and to the raw
+vector order if Cohere errors:
+
+| Key | Value |
+| --- | --- |
+| `RERANKER` | `cohere` |
+| `COHERE_API_KEY` | Your Cohere key from the [Cohere dashboard](https://dashboard.cohere.com/api-keys) |
+| `RERANK_MODEL` | `rerank-v3.5` (optional; this is the default) |
+
 **Give production its own collection.** Qdrant holds the vectors, Postgres
 holds the document records, and the two must describe the same set. Pointing a
 fresh deployment at a collection you already used locally leaves vectors with no
@@ -517,7 +528,11 @@ Everything the API reads, with its default from `config.py`.
 | `MAX_UPLOAD_BYTES` | `20971520` | Upload size ceiling (20 MB); nginx allows 21 MB so the API enforces it |
 | `TOP_K` / `RERANK_K` | `20` / `8` | Candidates retrieved, then kept |
 | `SCORE_THRESHOLD` | `0.25` | Minimum similarity to cite |
-| `CHAT_MODEL` | `gpt-4o-mini` | Answer generation model |
+| `CHAT_MODEL` | `gpt-4o-mini` | Answer generation model (and the default reranker) |
+| `RERANKER` | `llm` | Reranker backend: `llm` (chat model as judge) or `cohere` (hosted cross-encoder). `cohere` needs `COHERE_API_KEY`; without it, falls back to `llm` |
+| `COHERE_API_KEY` | *(empty)* | Cohere key; required only when `RERANKER=cohere` |
+| `RERANK_MODEL` | `rerank-v3.5` | Cohere rerank model; used only when `RERANKER=cohere` |
+| `RERANK_TIMEOUT_SECONDS` | `15` | Timeout for the Cohere rerank HTTP call |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
 | `LOG_LEVEL` | `INFO` | Root log level |
 | `LOG_FORMAT` | `text` | `text` for human-readable logs, `json` for one JSON object per line (aggregators) |

@@ -24,16 +24,16 @@ flowchart LR
   P --> M[(Postgres<br/>metadata)]
   QU[Question] --> QE[Embed query]
   QE --> Q
-  Q --> R[LLM rerank]
+  Q --> R[Rerank<br/>LLM or cross-encoder]
   R --> A[Answer + citations]
 ```
 
-Retrieval is deliberately conservative: candidates are pulled by cosine similarity, filtered by a score threshold, reranked by a fast LLM call, and only then passed to the answering model as **evidence rather than instructions**. If nothing clears the threshold, the service says so instead of inventing an answer.
+Retrieval is deliberately conservative: candidates are pulled by cosine similarity, filtered by a score threshold, reranked (a fast LLM judge by default, or a Cohere cross-encoder via `RERANKER=cohere`), and only then passed to the answering model as **evidence rather than instructions**. If nothing clears the threshold, the service says so instead of inventing an answer.
 
 ## Features
 
 - **Grounded answers with citations** — every response is traceable to a filename and page
-- **LLM reranking** — retrieves `TOP_K` candidates, keeps the best `RERANK_K`
+- **Reranking (pluggable)** — retrieves `TOP_K` candidates, keeps the best `RERANK_K`; LLM-as-judge by default, swappable to a Cohere cross-encoder via `RERANKER`
 - **Score-threshold filtering** — weak matches never reach the answering model
 - **SSE streaming** — tokens arrive as they're generated, citations as a final event
 - **Content-hash deduplication** — re-uploading the same bytes re-indexes rather than duplicating; a renamed file is not new work

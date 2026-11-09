@@ -4,7 +4,8 @@ Runs a golden set through the *real* retrieval components against an isolated
 Qdrant collection, and reports:
 
   * Retrieval: recall@k and MRR, both pre-rerank (the vector-search ceiling) and
-    post-rerank (what the LLM reranker keeps).
+    post-rerank (what the configured reranker keeps -- LLM judge or Cohere
+    cross-encoder, per RERANKER).
   * Answer quality: LLM-judged faithfulness and answer-relevance (1-5).
   * Robustness: abstention rate on out-of-corpus questions (does it correctly
     refuse instead of hallucinating?).

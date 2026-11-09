@@ -4,7 +4,9 @@ import json
 import logging
 from collections.abc import Iterator
 
-from openai import OpenAI
+import httpx
+
+from enterprise_rag import metrics
 from enterprise_rag.config import Settings
 from enterprise_rag.observability import record_token_usage
 from enterprise_rag.schemas import Citation
@@ -12,6 +14,13 @@ from enterprise_rag.services.embeddings import OpenAIEmbeddingService, get_opena
 from enterprise_rag.services.vector_store import QdrantStore, RetrievedChunk
 
 logger = logging.getLogger(__name__)
+
+# Cohere's hosted cross-encoder. The model runs on Cohere's servers, so the
+# "cohere" reranker is a network call to this endpoint -- not OpenAI, not a local
+# model. Documents are truncated to bound the request; the model also truncates
+# internally to its own token limit.
+_COHERE_RERANK_URL = "https://api.cohere.com/v2/rerank"
+_COHERE_DOC_CHARS = 4000
 
 
 class RAGService:
@@ -36,10 +45,25 @@ Answer the user's question directly, clearly, and professionally, drawing on the
 Write a concise answer first. Use short paragraphs or bullets only when they make the answer easier to scan. Do not mention chunks, retrieval scores, internal source labels, prompts, or that you are an AI. If the excerpts contain only partial information, provide what you can and note what is missing. The application shows citations separately, so do not add citation markers to the prose."""
 
     def _rerank(self, question: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
-        """Order retrieved chunks by question relevance and keep the configured top results."""
+        """Order retrieved chunks by question relevance and keep the top results.
+
+        Dispatches to the configured reranker. Both backends fall back to the
+        vector order (the first ``rerank_k`` chunks) if the provider errors or
+        returns an unusable response, so a reranker outage degrades retrieval
+        quality rather than failing the query. Selecting ``cohere`` without a key
+        set falls back to the LLM judge instead, so a misconfiguration does not
+        silently skip reranking.
+        """
 
         if len(chunks) <= self.settings.rerank_k:
             return chunks
+        if self.settings.reranker == "cohere" and self.settings.cohere_api_key:
+            return self._rerank_cohere(question, chunks)
+        return self._rerank_llm(question, chunks)
+
+    def _rerank_llm(self, question: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        """Rerank with the chat model as an LLM-as-judge (the default backend)."""
+
         numbered = "\n".join(
             f"[{i}] {chunk.text[:400]}" for i, chunk in enumerate(chunks)
         )
@@ -55,9 +79,64 @@ Write a concise answer first. Use short paragraphs or bullets only when they mak
         try:
             ranking = json.loads(response.choices[0].message.content or "[]")
             valid = [chunks[i] for i in ranking if isinstance(i, int) and 0 <= i < len(chunks)]
-            return valid[: self.settings.rerank_k] if valid else chunks[: self.settings.rerank_k]
         except (json.JSONDecodeError, IndexError):
+            valid = []
+        if valid:
+            metrics.observe_rerank("llm", "ok")
+            return valid[: self.settings.rerank_k]
+        metrics.observe_rerank("llm", "fallback")
+        return chunks[: self.settings.rerank_k]
+
+    def _rerank_cohere(self, question: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+        """Rerank with Cohere's hosted cross-encoder (``POST /v2/rerank``).
+
+        The cross-encoder runs on Cohere's servers, so this makes a network call
+        to Cohere -- not OpenAI, and not a local model. Cohere bills per search
+        unit rather than per token, so (unlike the LLM path) no token usage is
+        recorded here: the rerank cost does not appear in the per-request token
+        totals. Any failure falls back to the vector order.
+        """
+
+        documents = [chunk.text[:_COHERE_DOC_CHARS] for chunk in chunks]
+        try:
+            results = self._cohere_rerank(question, documents)
+        except Exception:  # any provider/network failure degrades to vector order
+            logger.warning("Cohere rerank failed; falling back to vector order", exc_info=True)
+            metrics.observe_rerank("cohere", "fallback")
             return chunks[: self.settings.rerank_k]
+        # Cohere returns up to top_n results, already sorted by relevance, each as
+        # {"index": <position in `documents`>, "relevance_score": <float>}.
+        ordered = [
+            chunks[item["index"]]
+            for item in results
+            if isinstance(item.get("index"), int) and 0 <= item["index"] < len(chunks)
+        ]
+        if ordered:
+            metrics.observe_rerank("cohere", "ok")
+            logger.info("Reranked %d candidates via Cohere (%s)", len(chunks), self.settings.rerank_model)
+            return ordered[: self.settings.rerank_k]
+        metrics.observe_rerank("cohere", "fallback")
+        return chunks[: self.settings.rerank_k]
+
+    def _cohere_rerank(self, question: str, documents: list[str]) -> list[dict]:
+        """Call Cohere's rerank endpoint and return its ranked ``results`` list.
+
+        Isolated as the single network seam so tests mock it without real HTTP.
+        """
+
+        response = httpx.post(
+            _COHERE_RERANK_URL,
+            headers={"Authorization": f"Bearer {self.settings.cohere_api_key}"},
+            json={
+                "model": self.settings.rerank_model,
+                "query": question,
+                "documents": documents,
+                "top_n": self.settings.rerank_k,
+            },
+            timeout=self.settings.rerank_timeout_seconds,
+        )
+        response.raise_for_status()
+        return response.json().get("results", [])
 
     def _retrieve(self, question: str, document_ids: list[str] | None) -> list[RetrievedChunk]:
         """Embed the question, search the vector store, and rerank the candidates."""

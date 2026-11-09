@@ -40,6 +40,16 @@ rag_query_citations = Histogram(
     "Citations returned per answered query.",
     buckets=(0, 1, 2, 4, 8, 16),
 )
+# Rerank calls by backend and outcome. The Cohere reranker is billed per search
+# unit rather than per token, so its cost does NOT show up in rag_tokens_total;
+# rerank_calls_total{backend="cohere",outcome="ok"} is the count to watch for that
+# spend. outcome="fallback" means the backend errored or returned nothing usable
+# and the query degraded to the raw vector order.
+rerank_calls_total = Counter(
+    "rerank_calls_total",
+    "Rerank calls by backend and outcome.",
+    ["backend", "outcome"],  # backend: llm | cohere ; outcome: ok | fallback
+)
 
 
 def observe_http(method: str, path: str, status: int, duration_seconds: float) -> None:
@@ -55,6 +65,16 @@ def observe_query(citation_count: int, tokens: dict[str, int]) -> None:
     rag_query_citations.observe(citation_count)
     for kind in ("prompt", "completion", "embedding"):
         rag_tokens_total.labels(kind).inc(tokens.get(kind, 0))
+
+
+def observe_rerank(backend: str, outcome: str) -> None:
+    """Record one rerank attempt.
+
+    ``outcome`` is ``ok`` when the backend ranked the candidates, or ``fallback``
+    when it errored / returned nothing usable and the query used the vector order.
+    """
+
+    rerank_calls_total.labels(backend, outcome).inc()
 
 
 def render() -> tuple[bytes, str]:
